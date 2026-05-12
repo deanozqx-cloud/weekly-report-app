@@ -1,0 +1,2042 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>周报助手</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+    .scrollbar-thin::-webkit-scrollbar { width: 4px; }
+    .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
+    .scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 2px; }
+    .calendar-day:hover { background: #f1f5f9; }
+    textarea { resize: vertical; }
+    .fade-in { animation: fadeIn 0.2s ease; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+    .modal-overlay { animation: overlayIn 0.15s ease; }
+    @keyframes overlayIn { from { opacity: 0; } to { opacity: 1; } }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-800">
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+// ─────────────────────────────────────────
+// 节假日数据（2025-2026 中国大陆法定节假日）
+// ─────────────────────────────────────────
+const HOLIDAYS = {
+  // 2025
+  '2025-01-01': '元旦',
+  '2025-01-28': '春节', '2025-01-29': '春节', '2025-01-30': '春节',
+  '2025-01-31': '春节', '2025-02-01': '春节', '2025-02-02': '春节',
+  '2025-02-03': '春节', '2025-02-04': '春节',
+  '2025-04-04': '清明节', '2025-04-05': '清明节', '2025-04-06': '清明节',
+  '2025-05-01': '劳动节', '2025-05-02': '劳动节', '2025-05-03': '劳动节',
+  '2025-05-04': '劳动节', '2025-05-05': '劳动节',
+  '2025-05-31': '端午节', '2025-06-01': '端午节', '2025-06-02': '端午节',
+  '2025-10-01': '国庆节', '2025-10-02': '国庆节', '2025-10-03': '国庆节',
+  '2025-10-04': '中秋节', '2025-10-05': '国庆节', '2025-10-06': '国庆节',
+  '2025-10-07': '国庆节',
+  // 2026
+  '2026-01-01': '元旦', '2026-01-02': '元旦', '2026-01-03': '元旦',
+  '2026-02-17': '春节', '2026-02-18': '春节', '2026-02-19': '春节',
+  '2026-02-20': '春节', '2026-02-21': '春节', '2026-02-22': '春节',
+  '2026-02-23': '春节', '2026-02-24': '春节',
+  '2026-04-05': '清明节', '2026-04-06': '清明节', '2026-04-07': '清明节',
+  '2026-05-01': '劳动节', '2026-05-02': '劳动节', '2026-05-03': '劳动节',
+  '2026-05-04': '劳动节', '2026-05-05': '劳动节',
+  '2026-06-18': '端午节', '2026-06-19': '端午节', '2026-06-20': '端午节',
+  '2026-09-24': '中秋节', '2026-09-25': '中秋节', '2026-09-26': '中秋节', '2026-09-27': '中秋节',
+  '2026-10-01': '国庆节', '2026-10-02': '国庆节', '2026-10-03': '国庆节',
+  '2026-10-04': '国庆节', '2026-10-05': '国庆节', '2026-10-06': '国庆节',
+  '2026-10-07': '国庆节',
+};
+
+// 调休日（补班日）：周末需要上班的日期
+const WORKDAYS = {
+  // 2025
+  '2025-01-26': '调休', // 春节前
+  '2025-02-08': '调休', // 春节后
+  '2025-04-27': '调休', // 劳动节前
+  '2025-09-28': '调休', // 国庆前
+  '2025-10-11': '调休', // 国庆后
+  // 2026
+  '2026-02-15': '调休', // 春节前
+  '2026-02-28': '调休', // 春节后
+  '2026-04-26': '调休', // 劳动节前
+  '2026-05-09': '调休', // 劳动节后
+  '2026-10-10': '调休', // 国庆后
+};
+
+const PROGRESS_OPTIONS = ['前期方案', '需求中', '开发中', '测试中', '已上线', '已完成'];
+
+// ─────────────────────────────────────────
+// 工具函数
+// ─────────────────────────────────────────
+const fmt = (d) => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+};
+const today = () => fmt(new Date());
+const uid = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
+const getMonday = (dateStr) => {
+  const d = new Date(dateStr);
+  const day = d.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  d.setDate(d.getDate() + diff);
+  return fmt(d);
+};
+const getSunday = (dateStr) => {
+  const mon = new Date(getMonday(dateStr));
+  mon.setDate(mon.getDate() + 6);
+  return fmt(mon);
+};
+const addDays = (dateStr, n) => {
+  const d = new Date(dateStr);
+  d.setDate(d.getDate() + n);
+  return fmt(d);
+};
+const isWeekend = (dateStr) => {
+  const d = new Date(dateStr);
+  const day = d.getDay();
+  return day === 0 || day === 6;
+};
+const isHoliday = (dateStr) => !!HOLIDAYS[dateStr];
+const getWeekRange = (mondayStr) => {
+  const sun = getSunday(mondayStr);
+  const m = new Date(mondayStr);
+  const s = new Date(sun);
+  return `${m.getMonth()+1}.${m.getDate()}～${s.getMonth()+1}.${s.getDate()}`;
+};
+// 自定义起止日期的范围标签
+const getCustomRange = (startStr, endStr) => {
+  const s = new Date(startStr);
+  const e = new Date(endStr);
+  return `${s.getMonth()+1}.${s.getDate()}～${e.getMonth()+1}.${e.getDate()}`;
+};
+const formatDate = (dateStr) => {
+  const d = new Date(dateStr);
+  return `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日`;
+};
+
+// ─────────────────────────────────────────
+// localStorage 钩子
+// ─────────────────────────────────────────
+function useStorage(key, init) {
+  const [val, setVal] = useState(() => {
+    try {
+      const stored = localStorage.getItem(key);
+      return stored ? JSON.parse(stored) : (typeof init === 'function' ? init() : init);
+    } catch { return typeof init === 'function' ? init() : init; }
+  });
+  const save = useCallback((v) => {
+    setVal(v);
+    localStorage.setItem(key, JSON.stringify(v));
+  }, [key]);
+  return [val, save];
+}
+
+const DEFAULT_PROVIDERS = [
+  { id: 'deepseek', label: 'DeepSeek',  apiKey: '', model: 'deepseek-chat',             baseUrl: 'https://api.deepseek.com/v1',              apiType: 'openai' },
+  { id: 'openai',   label: 'OpenAI',    apiKey: '', model: 'gpt-4o-mini',               baseUrl: 'https://api.openai.com/v1',                apiType: 'openai' },
+  { id: 'claude',   label: 'Claude',    apiKey: '', model: 'claude-sonnet-4-20250514',  baseUrl: 'https://api.anthropic.com/v1',             apiType: 'claude' },
+  { id: 'zhipu',    label: '智谱 GLM',  apiKey: '', model: 'glm-4-flash',               baseUrl: 'https://open.bigmodel.cn/api/paas/v4',     apiType: 'openai' },
+  { id: 'kimi',     label: 'Kimi',      apiKey: '', model: 'moonshot-v1-8k',            baseUrl: 'https://api.moonshot.cn/v1',               apiType: 'openai' },
+];
+
+const defaultSettings = {
+  llm: { default: 'deepseek', providers: DEFAULT_PROVIDERS },
+  autoGenerate: { enabled: true, time: '18:00' },
+  defaultHours: 8,
+};
+
+// ─────────────────────────────────────────
+// AI 调用
+// ─────────────────────────────────────────
+async function callAI(settings, prompt) {
+  const providerId = settings.llm.default;
+  const providers = settings.llm.providers || DEFAULT_PROVIDERS;
+  const cfg = providers.find(p => p.id === providerId);
+  if (!cfg || !cfg.apiKey) throw new Error('请先在设置中配置 API Key');
+
+  if (cfg.apiType === 'claude') {
+    const baseUrl = (cfg.baseUrl || 'https://api.anthropic.com/v1').replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01' },
+      body: JSON.stringify({ model: cfg.model, max_tokens: 2048, messages: [{ role: 'user', content: prompt }] }),
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message || res.statusText); }
+    const data = await res.json();
+    return data.content[0].text;
+  } else {
+    const baseUrl = (cfg.baseUrl || 'https://api.openai.com/v1').replace(/\/$/, '');
+    const res = await fetch(`${baseUrl}/chat/completions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
+      body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 2048 }),
+    });
+    if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message || res.statusText); }
+    const data = await res.json();
+    return data.choices[0].message.content;
+  }
+}
+
+// ─────────────────────────────────────────
+// GitHub Gist 同步工具函数
+// ─────────────────────────────────────────
+const GIST_FILE = 'weekly-report-data.json';
+const GIST_HEADERS = (token) => ({
+  'Authorization': `Bearer ${token}`,
+  'Accept': 'application/vnd.github+json',
+  'Content-Type': 'application/json',
+  'X-GitHub-Api-Version': '2022-11-28',
+});
+
+async function gistCreate(token) {
+  const res = await fetch('https://api.github.com/gists', {
+    method: 'POST',
+    headers: GIST_HEADERS(token),
+    body: JSON.stringify({
+      description: '周报助手 - 工作记录数据',
+      public: false,
+      files: { [GIST_FILE]: { content: JSON.stringify({ workRecords: [], weeklyReports: [], lastUpdated: new Date().toISOString() }, null, 2) } },
+    }),
+  });
+  if (!res.ok) { const e = await res.json(); throw new Error(e.message || `${res.status}`); }
+  return (await res.json()).id;
+}
+
+async function gistLoad(token, gistId) {
+  const res = await fetch(`https://api.github.com/gists/${gistId}`, { headers: GIST_HEADERS(token) });
+  if (!res.ok) { const e = await res.json(); throw new Error(e.message || `${res.status}`); }
+  const data = await res.json();
+  const raw = data.files[GIST_FILE]?.content;
+  if (!raw) throw new Error('Gist 中未找到数据文件');
+  return JSON.parse(raw);
+}
+
+async function gistSave(token, gistId, workRecords, weeklyReports) {
+  const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+    method: 'PATCH',
+    headers: GIST_HEADERS(token),
+    body: JSON.stringify({
+      files: { [GIST_FILE]: { content: JSON.stringify({ workRecords, weeklyReports, lastUpdated: new Date().toISOString() }, null, 2) } },
+    }),
+  });
+  if (!res.ok) { const e = await res.json(); throw new Error(e.message || `${res.status}`); }
+}
+
+function buildReportPrompt(weekStart, records, defaultHours) {
+  const range = getWeekRange(weekStart);
+  const lines = records.map(r => `- 项目「${r.project}」：${r.content}（工时${r.hours}h）`).join('\n');
+  return `你是一个助手，请根据以下本周工作记录生成一份工作周报（Markdown 格式）。
+
+本周时间范围：${range}
+工作记录：
+${lines}
+
+要求：
+1. 生成"本周工作内容"和"下周工作计划"两个部分
+2. 本周工作内容用 Markdown 表格，列为：项目 | 工作内容 | 项目进度 | 备注
+3. 下周工作计划也用表格，列为：项目 | 工作内容
+4. 在最前面加上问候语：您好：\n\n本周(${range})的工作总结具体如下，请查收。
+5. 只输出 Markdown 内容，不要其他说明`;
+}
+
+// ─────────────────────────────────────────
+// 周报生成（无AI模板版）
+// ─────────────────────────────────────────
+function generateReportFromRecords(weekStart, records, weekEnd) {
+  weekEnd = weekEnd || getSunday(weekStart);
+  const range = getCustomRange(weekStart, weekEnd);
+
+  // 按项目分组
+  const byProject = {};
+  records.forEach(r => {
+    if (!byProject[r.project]) byProject[r.project] = [];
+    byProject[r.project].push(r);
+  });
+
+  const items = Object.entries(byProject).map(([project, recs]) => ({
+    id: uid(),
+    project,
+    content: recs.map(r => r.content).join('；'),
+    progress: '开发中',
+    note: '',
+  }));
+
+  const nextItems = items.map(it => ({
+    id: uid(),
+    project: it.project,
+    content: '',
+  }));
+
+  let md = `您好：\n\n本周(${range})的工作总结具体如下，请查收。\n\n`;
+  md += `## 本周工作内容\n\n`;
+  md += `| 项目 | 工作内容 | 项目进度 | 备注 |\n|------|----------|----------|------|\n`;
+  items.forEach(it => {
+    md += `| ${it.project} | ${it.content} | ${it.progress} | ${it.note} |\n`;
+  });
+  md += `\n## 下周工作计划\n\n`;
+  md += `| 项目 | 工作内容 |\n|------|----------|\n`;
+  nextItems.forEach(it => {
+    md += `| ${it.project} | ${it.content} |\n`;
+  });
+
+  return { items, nextItems, markdown: md, weekStart, weekEnd, range };
+}
+
+function parseMarkdownToReport(md) {
+  const items = [];
+  const nextItems = [];
+  const lines = md.split('\n');
+  let section = '';
+  for (const line of lines) {
+    if (line.includes('本周工作内容')) { section = 'current'; continue; }
+    if (line.includes('下周工作计划')) { section = 'next'; continue; }
+    if (section === 'current' && line.startsWith('|') && !line.includes('---') && !line.includes('项目')) {
+      const cols = line.split('|').map(s => s.trim()).filter(Boolean);
+      if (cols.length >= 2) {
+        items.push({ id: uid(), project: cols[0]||'', content: cols[1]||'', progress: cols[2]||'开发中', note: cols[3]||'' });
+      }
+    }
+    if (section === 'next' && line.startsWith('|') && !line.includes('---') && !line.includes('项目')) {
+      const cols = line.split('|').map(s => s.trim()).filter(Boolean);
+      if (cols.length >= 2) {
+        nextItems.push({ id: uid(), project: cols[0]||'', content: cols[1]||'' });
+      }
+    }
+  }
+  return { items, nextItems };
+}
+
+function buildMarkdown(report) {
+  const range = report.range || getWeekRange(report.weekStart);
+  let md = `您好：\n\n本周(${range})的工作总结具体如下，请查收。\n\n`;
+  md += `## 本周工作内容\n\n`;
+  md += `| 项目 | 工作内容 | 项目进度 | 备注 |\n|------|----------|----------|------|\n`;
+  (report.items||[]).forEach(it => {
+    md += `| ${it.project} | ${it.content} | ${it.progress||''} | ${it.note||''} |\n`;
+  });
+  md += `\n## 下周工作计划\n\n`;
+  md += `| 项目 | 工作内容 |\n|------|----------|\n`;
+  (report.nextItems||[]).forEach(it => {
+    md += `| ${it.project} | ${it.content||''} |\n`;
+  });
+  return md;
+}
+
+// ─────────────────────────────────────────
+// Modal 组件
+// ─────────────────────────────────────────
+function Modal({ title, onClose, children, width = 'max-w-lg' }) {
+  useEffect(() => {
+    const handler = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center modal-overlay" style={{background:'rgba(0,0,0,0.4)'}}>
+      <div className={`bg-white rounded-xl shadow-2xl w-full mx-4 ${width} fade-in`} style={{maxHeight:'90vh',display:'flex',flexDirection:'column'}}>
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+          <h3 className="font-semibold text-gray-800 text-lg">{title}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none">&times;</button>
+        </div>
+        <div className="overflow-y-auto flex-1 p-6">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// 工作记录表单
+// ─────────────────────────────────────────
+function WorkRecordForm({ record, date, projects, onSave, onClose }) {
+  const [form, setForm] = useState({
+    project: record?.project || '',
+    content: record?.content || '',
+    hours: record?.hours || 1,
+  });
+  const [customProject, setCustomProject] = useState('');
+  const [showProjects, setShowProjects] = useState(false);
+  const projRef = useRef(null);
+
+  const filtered = projects.filter(p => p.toLowerCase().includes((form.project||'').toLowerCase())).slice(0, 8);
+
+  const handleSave = () => {
+    if (!form.project.trim()) { alert('请填写项目名称'); return; }
+    if (!form.content.trim()) { alert('请填写工作内容'); return; }
+    if (!form.hours || form.hours < 0.5 || form.hours > 24) { alert('工时请填写0.5~24之间的数字'); return; }
+    onSave({ ...form, hours: parseFloat(form.hours) });
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="text-sm text-gray-500 font-medium">日期：{formatDate(date)}</div>
+
+      {/* 项目 */}
+      <div className="relative" ref={projRef}>
+        <label className="block text-sm font-medium text-gray-700 mb-1">项目 <span className="text-red-400">*</span></label>
+        <input
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+          placeholder="输入或选择项目名称"
+          value={form.project}
+          onChange={e => { setForm({...form, project: e.target.value}); setShowProjects(true); }}
+          onFocus={() => setShowProjects(true)}
+          onBlur={() => setTimeout(() => setShowProjects(false), 150)}
+        />
+        {showProjects && filtered.length > 0 && (
+          <div className="absolute z-10 w-full bg-white border border-gray-200 rounded-lg shadow-lg mt-1 overflow-hidden">
+            {filtered.map(p => (
+              <div key={p} className="px-3 py-2 text-sm cursor-pointer hover:bg-blue-50" onMouseDown={() => { setForm({...form, project: p}); setShowProjects(false); }}>{p}</div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 工作内容 */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">工作内容 <span className="text-red-400">*</span></label>
+        <textarea
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+          rows={3}
+          placeholder="描述今天完成的工作..."
+          value={form.content}
+          onChange={e => setForm({...form, content: e.target.value})}
+        />
+      </div>
+
+      {/* 工时 */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">工时（小时）</label>
+        <input
+          type="number" min="0.5" max="24" step="0.5"
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+          value={form.hours}
+          onChange={e => setForm({...form, hours: e.target.value})}
+        />
+      </div>
+
+      <div className="flex justify-end gap-2 pt-2">
+        <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
+        <button onClick={handleSave} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">保存</button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// 日历组件
+// ─────────────────────────────────────────
+function CalendarView({ workRecords, selectedDate, onSelectDate }) {
+  const [viewDate, setViewDate] = useState(() => {
+    const d = new Date();
+    return { year: d.getFullYear(), month: d.getMonth() };
+  });
+
+  const { year, month } = viewDate;
+  const todayStr = today();
+
+  // 当月工时统计
+  const hoursByDate = useMemo(() => {
+    const map = {};
+    workRecords.forEach(r => {
+      if (!map[r.date]) map[r.date] = 0;
+      map[r.date] += r.hours;
+    });
+    return map;
+  }, [workRecords]);
+
+  const firstDay = new Date(year, month, 1).getDay(); // 0=Sun
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const startOffset = firstDay === 0 ? 6 : firstDay - 1; // Mon start
+
+  const prevMonth = () => {
+    if (month === 0) setViewDate({ year: year - 1, month: 11 });
+    else setViewDate({ year, month: month - 1 });
+  };
+  const nextMonth = () => {
+    if (month === 11) setViewDate({ year: year + 1, month: 0 });
+    else setViewDate({ year, month: month + 1 });
+  };
+  const goToday = () => {
+    const d = new Date();
+    setViewDate({ year: d.getFullYear(), month: d.getMonth() });
+    onSelectDate(todayStr);
+  };
+
+  const MONTHS = ['一月','二月','三月','四月','五月','六月','七月','八月','九月','十月','十一月','十二月'];
+  const WEEKDAYS = ['一','二','三','四','五','六','日'];
+
+  const cells = [];
+  for (let i = 0; i < startOffset; i++) cells.push(null);
+  for (let d = 1; d <= daysInMonth; d++) {
+    const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+    cells.push(dateStr);
+  }
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
+      {/* 头部 */}
+      <div className="flex items-center justify-between mb-4">
+        <button onClick={prevMonth} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-500">&#8249;</button>
+        <div className="flex items-center gap-3">
+          <span className="font-semibold text-gray-800">{year}年 {MONTHS[month]}</span>
+          <button onClick={goToday} className="text-xs text-blue-600 hover:text-blue-700 px-2 py-0.5 border border-blue-200 rounded-full">今天</button>
+        </div>
+        <button onClick={nextMonth} className="p-1.5 hover:bg-gray-100 rounded-lg text-gray-500">&#8250;</button>
+      </div>
+
+      {/* 星期头 */}
+      <div className="grid grid-cols-7 mb-1">
+        {WEEKDAYS.map(w => (
+          <div key={w} className="text-center text-xs text-gray-400 font-medium py-1">{w}</div>
+        ))}
+      </div>
+
+      {/* 日期格子 */}
+      <div className="grid grid-cols-7 gap-0.5">
+        {cells.map((dateStr, idx) => {
+          if (!dateStr) return <div key={`e-${idx}`} />;
+          const isToday = dateStr === todayStr;
+          const isSelected = dateStr === selectedDate;
+          const holiday = HOLIDAYS[dateStr];
+          const workday = WORKDAYS[dateStr]; // 调休（补班）
+          const weekend = isWeekend(dateStr) && !workday; // 调休日不算普通周末
+          const hours = hoursByDate[dateStr];
+
+          let bgClass = 'hover:bg-gray-50';
+          let textClass = 'text-gray-700';
+
+          if (isSelected) { bgClass = 'bg-blue-600'; textClass = 'text-white'; }
+          else if (holiday) { bgClass = 'bg-red-50 hover:bg-red-100'; textClass = 'text-red-600'; }
+          else if (workday) { bgClass = 'bg-purple-50 hover:bg-purple-100'; textClass = 'text-purple-700'; }
+          else if (weekend) { bgClass = 'bg-orange-50 hover:bg-orange-100'; textClass = 'text-orange-500'; }
+
+          return (
+            <div
+              key={dateStr}
+              className={`calendar-day relative flex flex-col items-center justify-center rounded-lg cursor-pointer py-1 px-0.5 ${bgClass}`}
+              style={{minHeight:'52px'}}
+              onClick={() => onSelectDate(dateStr)}
+            >
+              <span className={`text-sm font-medium ${textClass} ${isToday && !isSelected ? 'ring-2 ring-blue-400 rounded-full w-6 h-6 flex items-center justify-center' : ''}`}>
+                {new Date(dateStr).getDate()}
+              </span>
+              {holiday && (
+                <span className={`text-xs leading-tight text-center ${isSelected ? 'text-blue-100' : 'text-red-400'}`} style={{fontSize:'9px',lineHeight:'1.1',maxWidth:'100%'}}>
+                  {holiday}
+                </span>
+              )}
+              {!holiday && workday && (
+                <span className={`text-xs leading-tight text-center ${isSelected ? 'text-blue-100' : 'text-purple-500'}`} style={{fontSize:'9px',lineHeight:'1.1'}}>
+                  {workday}
+                </span>
+              )}
+              {hours != null && (
+                <span className={`text-xs font-medium mt-0.5 ${isSelected ? 'text-blue-100' : 'text-blue-500'}`} style={{fontSize:'10px'}}>
+                  {hours}h
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* 图例 */}
+      <div className="flex flex-wrap gap-3 mt-3 pt-3 border-t border-gray-50">
+        <span className="flex items-center gap-1 text-xs text-gray-400"><span className="w-3 h-3 rounded bg-blue-600 inline-block"></span>选中</span>
+        <span className="flex items-center gap-1 text-xs text-gray-400"><span className="w-3 h-3 rounded bg-red-100 inline-block"></span>节假日</span>
+        <span className="flex items-center gap-1 text-xs text-gray-400"><span className="w-3 h-3 rounded bg-purple-100 inline-block"></span>调休补班</span>
+        <span className="flex items-center gap-1 text-xs text-gray-400"><span className="w-3 h-3 rounded bg-orange-50 border border-orange-200 inline-block"></span>周末</span>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// 工作台页面
+// ─────────────────────────────────────────
+function WorkbenchPage({ workRecords, setWorkRecords, settings }) {
+  const [selectedDate, setSelectedDate] = useState(today());
+  const [showForm, setShowForm] = useState(false);
+  const [editRecord, setEditRecord] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+
+  const projects = useMemo(() => {
+    const set = new Set(workRecords.map(r => r.project).filter(Boolean));
+    return [...set].sort();
+  }, [workRecords]);
+
+  const dayRecords = useMemo(() =>
+    workRecords.filter(r => r.date === selectedDate),
+  [workRecords, selectedDate]);
+
+  const dayHours = dayRecords.reduce((s, r) => s + r.hours, 0);
+  const holiday = HOLIDAYS[selectedDate];
+  const weekend = isWeekend(selectedDate);
+
+  const handleSave = (form) => {
+    if (editRecord) {
+      setWorkRecords(workRecords.map(r => r.id === editRecord.id ? { ...r, ...form } : r));
+    } else {
+      setWorkRecords([...workRecords, { id: uid(), date: selectedDate, ...form, createdAt: new Date().toISOString() }]);
+    }
+    setShowForm(false);
+    setEditRecord(null);
+  };
+
+  const handleDelete = (id) => {
+    setWorkRecords(workRecords.filter(r => r.id !== id));
+    setDeleteConfirm(null);
+  };
+
+  return (
+    <div className="flex gap-4 h-full">
+      {/* 左侧日历 */}
+      <div style={{width:'340px',flexShrink:0}}>
+        <CalendarView workRecords={workRecords} selectedDate={selectedDate} onSelectDate={setSelectedDate} />
+      </div>
+
+      {/* 右侧工作记录 */}
+      <div className="flex-1 bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col">
+        {/* 头部 */}
+        <div className="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h2 className="font-semibold text-gray-800 text-base">{formatDate(selectedDate)}</h2>
+            <div className="flex items-center gap-2 mt-0.5">
+              {holiday && <span className="text-xs bg-red-100 text-red-600 px-2 py-0.5 rounded-full">{holiday}</span>}
+              {!holiday && weekend && <span className="text-xs bg-orange-100 text-orange-500 px-2 py-0.5 rounded-full">周末</span>}
+              {dayHours > 0 && <span className="text-xs text-gray-400">合计 <span className="font-medium text-blue-600">{dayHours}h</span></span>}
+            </div>
+          </div>
+          <button
+            onClick={() => { setEditRecord(null); setShowForm(true); }}
+            className="flex items-center gap-1.5 bg-blue-600 text-white text-sm px-4 py-2 rounded-lg hover:bg-blue-700 font-medium"
+          >
+            <span className="text-base leading-none">+</span> 添加
+          </button>
+        </div>
+
+        {/* 记录列表 */}
+        <div className="flex-1 overflow-y-auto p-5 space-y-3 scrollbar-thin">
+          {dayRecords.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-40 text-gray-300">
+              <svg className="w-12 h-12 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
+              </svg>
+              <p className="text-sm">暂无工作记录，点击「添加」开始记录</p>
+            </div>
+          ) : dayRecords.map(rec => (
+            <div key={rec.id} className="border border-gray-100 rounded-lg p-4 hover:border-blue-200 hover:bg-blue-50 transition-colors group">
+              <div className="flex items-start justify-between">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-medium text-gray-800 text-sm truncate">{rec.project}</span>
+                    <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full shrink-0">{rec.hours}h</span>
+                  </div>
+                  <p className="text-sm text-gray-600 leading-relaxed">{rec.content}</p>
+                </div>
+                <div className="flex gap-1 ml-3 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                  <button onClick={() => { setEditRecord(rec); setShowForm(true); }} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-100 rounded-md">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                  </button>
+                  <button onClick={() => setDeleteConfirm(rec.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-md">
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  </button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 工作记录表单弹窗 */}
+      {showForm && (
+        <Modal title={editRecord ? '编辑记录' : '添加记录'} onClose={() => { setShowForm(false); setEditRecord(null); }}>
+          <WorkRecordForm
+            record={editRecord}
+            date={selectedDate}
+            projects={projects}
+            onSave={handleSave}
+            onClose={() => { setShowForm(false); setEditRecord(null); }}
+          />
+        </Modal>
+      )}
+
+      {/* 删除确认 */}
+      {deleteConfirm && (
+        <Modal title="确认删除" onClose={() => setDeleteConfirm(null)}>
+          <p className="text-gray-600 mb-6">确定要删除这条工作记录吗？此操作不可恢复。</p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setDeleteConfirm(null)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
+            <button onClick={() => handleDelete(deleteConfirm)} className="px-4 py-2 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600 font-medium">删除</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// 周报编辑器
+// ─────────────────────────────────────────
+function ReportEditor({ report, onSave, settings }) {
+  const [items, setItems] = useState(report.items || []);
+  const [nextItems, setNextItems] = useState(report.nextItems || []);
+  const [markdown, setMarkdown] = useState(report.markdown || '');
+  const [mdMode, setMdMode] = useState(false);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
+  const [copied, setCopied] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const availableProviders = settings?.llm?.providers || DEFAULT_PROVIDERS;
+  const [selectedProvider, setSelectedProvider] = useState(settings?.llm?.default || availableProviders[0]?.id || '');
+
+  // 同步外部report变化
+  useEffect(() => {
+    setItems(report.items || []);
+    setNextItems(report.nextItems || []);
+    setMarkdown(report.markdown || '');
+  }, [report.id]);
+
+  const handleSave = () => {
+    const md = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems });
+    const parsed = mdMode ? parseMarkdownToReport(markdown) : { items, nextItems };
+    onSave({ ...report, ...parsed, markdown: md, updatedAt: new Date().toISOString() });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
+  };
+
+  const handleCopy = () => {
+    const md = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems });
+    navigator.clipboard.writeText(md);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleAiGen = async () => {
+    setAiError('');
+    setAiLoading(true);
+    try {
+      // 从 workRecords 重新获取该周的工作记录（通过 prompt 传入当前items）
+      const prompt = `请根据以下本周工作情况，重新生成一份专业的中文工作周报（Markdown格式）：
+
+本周范围：${report.range}
+
+当前工作记录：
+${items.map(it => `- 项目「${it.project}」：${it.content}，进度：${it.progress}`).join('\n')}
+
+要求：
+1. 包含"本周工作内容"和"下周工作计划"两个表格
+2. 本周工作内容表格列：项目 | 工作内容 | 项目进度 | 备注
+3. 下周工作计划表格列：项目 | 工作内容
+4. 开头加上：您好：\\n\\n本周(${report.range})的工作总结具体如下，请查收。
+5. 只输出Markdown内容`;
+
+      const settingsCopy = { ...settings, llm: { ...settings.llm, default: selectedProvider } };
+      const result = await callAI(settingsCopy, prompt);
+      setMarkdown(result);
+      const parsed = parseMarkdownToReport(result);
+      if (parsed.items.length) setItems(parsed.items);
+      if (parsed.nextItems.length) setNextItems(parsed.nextItems);
+      setMdMode(true);
+    } catch (e) {
+      setAiError(e.message);
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const addItem = () => setItems([...items, { id: uid(), project: '', content: '', progress: '开发中', note: '' }]);
+  const removeItem = (id) => setItems(items.filter(i => i.id !== id));
+  const updateItem = (id, field, val) => setItems(items.map(i => i.id === id ? {...i, [field]: val} : i));
+
+  const addNextItem = () => setNextItems([...nextItems, { id: uid(), project: '', content: '' }]);
+  const removeNextItem = (id) => setNextItems(nextItems.filter(i => i.id !== id));
+  const updateNextItem = (id, field, val) => setNextItems(nextItems.map(i => i.id === id ? {...i, [field]: val} : i));
+
+  // providerLabels 从 settings 动态取
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* 工具栏 */}
+      <div className="flex items-center justify-between px-5 py-3 border-b border-gray-100 gap-3 flex-wrap">
+        <div className="flex items-center gap-2">
+          <h3 className="font-semibold text-gray-800">第 {report.range} 周</h3>
+          <span className="text-xs text-gray-400">{report.weekStart} ～ {report.weekEnd}</span>
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* AI重新生成 */}
+          <div className="flex items-center gap-1 border border-gray-200 rounded-lg px-2 py-1.5">
+            <select
+              className="text-xs text-gray-600 bg-transparent outline-none"
+              value={selectedProvider}
+              onChange={e => setSelectedProvider(e.target.value)}
+            >
+              {availableProviders.map(p => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+            <button
+              onClick={handleAiGen}
+              disabled={aiLoading}
+              className="text-xs text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {aiLoading ? '生成中...' : 'AI 重新生成'}
+            </button>
+          </div>
+          {/* 编辑模式切换 */}
+          <div className="flex border border-gray-200 rounded-lg overflow-hidden text-xs">
+            <button onClick={() => setMdMode(false)} className={`px-3 py-1.5 ${!mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}>结构化</button>
+            <button onClick={() => setMdMode(true)} className={`px-3 py-1.5 ${mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-50'}`}>Markdown</button>
+          </div>
+          <button onClick={handleCopy} className={`px-3 py-1.5 text-xs rounded-lg border ${copied ? 'bg-green-50 border-green-200 text-green-600' : 'border-gray-200 text-gray-600 hover:bg-gray-50'}`}>
+            {copied ? '已复制' : '复制 Markdown'}
+          </button>
+          <button onClick={handleSave} className={`px-3 py-1.5 text-xs rounded-lg font-medium ${saved ? 'bg-green-500 text-white' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+            {saved ? '已保存' : '保存'}
+          </button>
+        </div>
+      </div>
+
+      {aiError && (
+        <div className="mx-5 mt-3 bg-red-50 border border-red-200 text-red-600 text-sm px-4 py-2 rounded-lg">{aiError}</div>
+      )}
+
+      <div className="flex-1 overflow-y-auto p-5 space-y-6 scrollbar-thin">
+        {mdMode ? (
+          <textarea
+            className="w-full border border-gray-200 rounded-lg p-4 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
+            style={{minHeight:'500px'}}
+            value={markdown}
+            onChange={e => { setMarkdown(e.target.value); const p = parseMarkdownToReport(e.target.value); if(p.items.length) setItems(p.items); if(p.nextItems.length) setNextItems(p.nextItems); }}
+          />
+        ) : (
+          <>
+            {/* 本周工作内容 */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-gray-700 text-sm">本周工作内容</h4>
+                <button onClick={addItem} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1">
+                  <span>+</span> 添加行
+                </button>
+              </div>
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="grid bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 px-3 py-2" style={{gridTemplateColumns:'1fr 2fr 1fr 1fr auto'}}>
+                  <span>项目</span><span>工作内容</span><span>项目进度</span><span>备注</span><span></span>
+                </div>
+                {items.map((it, idx) => (
+                  <div key={it.id} className={`grid items-center px-3 py-2 gap-2 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`} style={{gridTemplateColumns:'1fr 2fr 1fr 1fr auto'}}>
+                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.project} onChange={e => updateItem(it.id, 'project', e.target.value)} placeholder="项目名" />
+                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.content} onChange={e => updateItem(it.id, 'content', e.target.value)} placeholder="工作内容" />
+                    <select className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.progress || '开发中'} onChange={e => updateItem(it.id, 'progress', e.target.value)}>
+                      {PROGRESS_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+                    </select>
+                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.note||''} onChange={e => updateItem(it.id, 'note', e.target.value)} placeholder="备注" />
+                    <button onClick={() => removeItem(it.id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">&times;</button>
+                  </div>
+                ))}
+                {items.length === 0 && <div className="text-center text-gray-300 text-sm py-4">暂无数据</div>}
+              </div>
+            </div>
+
+            {/* 下周工作计划 */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-gray-700 text-sm">下周工作计划</h4>
+                <button onClick={addNextItem} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1">
+                  <span>+</span> 添加行
+                </button>
+              </div>
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="grid bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 px-3 py-2" style={{gridTemplateColumns:'1fr 2fr auto'}}>
+                  <span>项目</span><span>工作内容</span><span></span>
+                </div>
+                {nextItems.map((it, idx) => (
+                  <div key={it.id} className={`grid items-center px-3 py-2 gap-2 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`} style={{gridTemplateColumns:'1fr 2fr auto'}}>
+                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.project} onChange={e => updateNextItem(it.id, 'project', e.target.value)} placeholder="项目名" />
+                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.content} onChange={e => updateNextItem(it.id, 'content', e.target.value)} placeholder="下周计划" />
+                    <button onClick={() => removeNextItem(it.id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">&times;</button>
+                  </div>
+                ))}
+                {nextItems.length === 0 && <div className="text-center text-gray-300 text-sm py-4">暂无数据</div>}
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// 周选择弹窗
+// ─────────────────────────────────────────
+function WeekPickerModal({ onConfirm, onClose, workRecords, weeklyReports }) {
+  const thisMonday = getMonday(today());
+  const thisSunday = getSunday(today());
+  const [startDate, setStartDate] = useState(thisMonday);
+  const [endDate, setEndDate]     = useState(thisSunday);
+
+  // 日期合法性：结束不早于开始
+  const isValid = endDate >= startDate;
+
+  const records = isValid ? workRecords.filter(r => r.date >= startDate && r.date <= endDate) : [];
+  const totalHours = records.reduce((s, r) => s + r.hours, 0);
+  const existing = weeklyReports.find(r => r.weekStart === startDate && r.weekEnd === endDate);
+
+  // 整体前移/后移 7 天（保持时间跨度不变）
+  const spanDays = isValid ? Math.round((new Date(endDate) - new Date(startDate)) / 86400000) : 6;
+  const shiftBack = () => {
+    setStartDate(addDays(startDate, -7));
+    setEndDate(addDays(endDate, -7));
+  };
+  const shiftForward = () => {
+    setStartDate(addDays(startDate, 7));
+    setEndDate(addDays(endDate, 7));
+  };
+  const goThisWeek = () => { setStartDate(thisMonday); setEndDate(thisSunday); };
+
+  const isThisWeek = startDate === thisMonday && endDate === thisSunday;
+
+  // 工作记录按日期分组
+  const byDate = {};
+  records.forEach(r => { if (!byDate[r.date]) byDate[r.date] = []; byDate[r.date].push(r); });
+  const sortedDates = Object.keys(byDate).sort();
+
+  return (
+    <Modal title="选择周期" onClose={onClose} width="max-w-md">
+      <div className="space-y-5">
+
+        {/* 日期范围选择 */}
+        <div className="bg-gray-50 rounded-xl p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <button onClick={shiftBack} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-200 text-gray-400 text-xl leading-none shrink-0" title="整体前移一周">‹</button>
+            <div className="flex-1 flex items-center gap-2">
+              <div className="flex-1">
+                <div className="text-xs text-gray-400 mb-1 text-center">开始日期</div>
+                <input
+                  type="date"
+                  className="w-full border border-gray-200 bg-white rounded-lg px-2 py-1.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  value={startDate}
+                  onChange={e => {
+                    const v = e.target.value;
+                    setStartDate(v);
+                    // 若结束早于开始则自动同步
+                    if (v > endDate) setEndDate(v);
+                  }}
+                />
+              </div>
+              <span className="text-gray-400 text-sm shrink-0 mt-4">—</span>
+              <div className="flex-1">
+                <div className="text-xs text-gray-400 mb-1 text-center">结束日期</div>
+                <input
+                  type="date"
+                  className="w-full border border-gray-200 bg-white rounded-lg px-2 py-1.5 text-sm text-center focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  value={endDate}
+                  min={startDate}
+                  onChange={e => setEndDate(e.target.value)}
+                />
+              </div>
+            </div>
+            <button onClick={shiftForward} className="w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-200 text-gray-400 text-xl leading-none shrink-0" title="整体后移一周">›</button>
+          </div>
+
+          {/* 快捷标签 */}
+          <div className="flex items-center gap-2 justify-center flex-wrap">
+            <button
+              onClick={goThisWeek}
+              className={`text-xs px-3 py-1 rounded-full border transition-colors ${isThisWeek ? 'bg-blue-600 border-blue-600 text-white' : 'border-gray-300 text-gray-500 hover:border-blue-400 hover:text-blue-600'}`}
+            >本周（周一—周日）</button>
+            <button
+              onClick={() => { setStartDate(addDays(thisMonday, -7)); setEndDate(addDays(thisSunday, -7)); }}
+              className="text-xs px-3 py-1 rounded-full border border-gray-300 text-gray-500 hover:border-blue-400 hover:text-blue-600 transition-colors"
+            >上周</button>
+            {isValid && spanDays !== 6 && (
+              <span className="text-xs text-gray-400">共 {spanDays + 1} 天</span>
+            )}
+          </div>
+        </div>
+
+        {/* 工作记录预览 */}
+        <div>
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-gray-600">所选时段工作记录</span>
+            {records.length > 0 && (
+              <span className="text-xs text-gray-400">{records.length} 条，共 <span className="text-blue-600 font-medium">{totalHours}h</span></span>
+            )}
+          </div>
+          {!isValid ? (
+            <div className="text-center py-4 text-red-400 bg-red-50 rounded-lg text-xs">结束日期不能早于开始日期</div>
+          ) : records.length === 0 ? (
+            <div className="text-center py-6 text-gray-300 bg-gray-50 rounded-lg">
+              <svg className="w-8 h-8 mx-auto mb-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+              <p className="text-xs">该时段暂无工作记录</p>
+            </div>
+          ) : (
+            <div className="border border-gray-100 rounded-lg overflow-hidden max-h-44 overflow-y-auto scrollbar-thin">
+              {sortedDates.map(date => (
+                <div key={date} className="border-b border-gray-50 last:border-0">
+                  <div className="px-3 py-1.5 bg-gray-50 text-xs font-medium text-gray-500 flex justify-between">
+                    <span>{formatDate(date)}</span>
+                    <span className="text-blue-500">{byDate[date].reduce((s,r)=>s+r.hours,0)}h</span>
+                  </div>
+                  {byDate[date].map(r => (
+                    <div key={r.id} className="px-3 py-1.5 flex items-center gap-2 text-xs text-gray-600">
+                      <span className="font-medium text-gray-700 shrink-0">{r.project}</span>
+                      <span className="text-gray-400">·</span>
+                      <span className="truncate">{r.content}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 覆盖提示 */}
+        {existing && (
+          <div className="flex items-center gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+            <svg className="w-4 h-4 text-amber-500 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+            <span className="text-xs text-amber-700">该时段已有周报，生成后将覆盖原有内容</span>
+          </div>
+        )}
+
+        {/* 操作按钮 */}
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
+          <button
+            disabled={!isValid}
+            onClick={() => onConfirm(startDate, endDate, records.length === 0)}
+            className="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            生成周报
+          </button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─────────────────────────────────────────
+// 周报管理页面
+// ─────────────────────────────────────────
+function WeeklyReportPage({ workRecords, weeklyReports, setWeeklyReports, settings }) {
+  const [selectedId, setSelectedId] = useState(weeklyReports[0]?.id || null);
+  const [showPicker, setShowPicker] = useState(false);
+
+  const selectedReport = weeklyReports.find(r => r.id === selectedId);
+
+  const handleConfirmGenerate = (weekStart, weekEnd, isEmpty) => {
+    if (isEmpty && !window.confirm('该时段没有工作记录，是否仍要生成空白周报？')) return;
+    setShowPicker(false);
+
+    const records = workRecords.filter(r => r.date >= weekStart && r.date <= weekEnd);
+    const existing = weeklyReports.find(r => r.weekStart === weekStart && r.weekEnd === weekEnd);
+
+    const generated = generateReportFromRecords(weekStart, records, weekEnd);
+    const newReport = { id: uid(), ...generated, weekEnd, generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+
+    let newReports;
+    if (existing) {
+      newReports = weeklyReports.map(r => (r.weekStart === weekStart && r.weekEnd === weekEnd) ? { ...newReport, id: r.id } : r);
+    } else {
+      newReports = [newReport, ...weeklyReports].sort((a, b) => b.weekStart.localeCompare(a.weekStart));
+    }
+    setWeeklyReports(newReports);
+    setSelectedId(existing ? existing.id : newReport.id);
+  };
+
+  const handleSaveReport = (updated) => {
+    setWeeklyReports(weeklyReports.map(r => r.id === updated.id ? updated : r));
+  };
+
+  const handleDeleteReport = (id) => {
+    if (!window.confirm('确定删除这份周报？')) return;
+    const newReports = weeklyReports.filter(r => r.id !== id);
+    setWeeklyReports(newReports);
+    setSelectedId(newReports[0]?.id || null);
+  };
+
+  return (
+    <div className="flex gap-4 h-full">
+      {/* 左侧周报列表 */}
+      <div style={{width:'220px',flexShrink:0}} className="bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col">
+        <div className="p-4 border-b border-gray-100">
+          <button
+            onClick={() => setShowPicker(true)}
+            className="w-full bg-blue-600 text-white text-sm py-2.5 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+            生成周报
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
+          {weeklyReports.length === 0 ? (
+            <div className="text-center text-gray-300 text-sm py-8 px-3">
+              <svg className="w-10 h-10 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+              <p>点击上方按钮<br/>生成第一份周报</p>
+            </div>
+          ) : weeklyReports.map(r => (
+            <div
+              key={r.id}
+              className={`group flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer mb-1 ${selectedId === r.id ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50'}`}
+              onClick={() => setSelectedId(r.id)}
+            >
+              <div className="min-w-0">
+                <div className={`text-sm font-medium truncate ${selectedId === r.id ? 'text-blue-700' : 'text-gray-700'}`}>{r.range}</div>
+                <div className="text-xs text-gray-400">{r.weekStart}</div>
+              </div>
+              <button
+                onClick={e => { e.stopPropagation(); handleDeleteReport(r.id); }}
+                className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 text-lg leading-none transition-opacity ml-1 shrink-0"
+              >&times;</button>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 周选择弹窗 */}
+      {showPicker && (
+        <WeekPickerModal
+          onConfirm={handleConfirmGenerate}
+          onClose={() => setShowPicker(false)}
+          workRecords={workRecords}
+          weeklyReports={weeklyReports}
+        />
+      )}
+
+      {/* 右侧编辑区 */}
+      <div className="flex-1 bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
+        {selectedReport ? (
+          <ReportEditor report={selectedReport} onSave={handleSaveReport} settings={settings} />
+        ) : (
+          <div className="flex flex-col items-center justify-center h-full text-gray-300">
+            <svg className="w-16 h-16 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            <p className="text-sm">选择周报或点击「生成周报」</p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// 工作明细页面
+// ─────────────────────────────────────────
+function WorkDetailPage({ workRecords, setWorkRecords }) {
+  const [search, setSearch] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [sortBy, setSortBy] = useState('date_desc');
+  const [editRecord, setEditRecord] = useState(null);
+  const [deleteConfirm, setDeleteConfirm] = useState(null);
+
+  const projects = useMemo(() => [...new Set(workRecords.map(r => r.project).filter(Boolean))].sort(), [workRecords]);
+
+  const filtered = useMemo(() => {
+    let list = [...workRecords];
+    if (search) list = list.filter(r => r.project.includes(search) || r.content.includes(search));
+    if (startDate) list = list.filter(r => r.date >= startDate);
+    if (endDate) list = list.filter(r => r.date <= endDate);
+    const [field, dir] = sortBy.split('_');
+    list.sort((a, b) => {
+      const va = field === 'hours' ? a.hours : a[field];
+      const vb = field === 'hours' ? b.hours : b[field];
+      return dir === 'asc' ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
+    });
+    return list;
+  }, [workRecords, search, startDate, endDate, sortBy]);
+
+  const totalHours = filtered.reduce((s, r) => s + r.hours, 0);
+  const uniqueProjects = new Set(filtered.map(r => r.project)).size;
+
+  const handleSave = (form) => {
+    setWorkRecords(workRecords.map(r => r.id === editRecord.id ? { ...r, ...form } : r));
+    setEditRecord(null);
+  };
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col h-full">
+      {/* 筛选工具栏 */}
+      <div className="p-4 border-b border-gray-100 space-y-3">
+        <div className="flex gap-3 flex-wrap">
+          <input
+            className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 flex-1"
+            style={{minWidth:'150px'}}
+            placeholder="搜索项目或内容..."
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+          />
+          <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" value={startDate} onChange={e => setStartDate(e.target.value)} />
+          <span className="text-gray-400 self-center">至</span>
+          <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" value={endDate} onChange={e => setEndDate(e.target.value)} />
+          <select className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" value={sortBy} onChange={e => setSortBy(e.target.value)}>
+            <option value="date_desc">日期 ↓</option>
+            <option value="date_asc">日期 ↑</option>
+            <option value="hours_desc">工时 ↓</option>
+            <option value="hours_asc">工时 ↑</option>
+          </select>
+        </div>
+        {/* 统计 */}
+        <div className="flex gap-4 text-sm text-gray-500">
+          <span>共 <strong className="text-gray-700">{filtered.length}</strong> 条记录</span>
+          <span>总工时 <strong className="text-blue-600">{totalHours.toFixed(1)}h</strong></span>
+          <span>涉及 <strong className="text-gray-700">{uniqueProjects}</strong> 个项目</span>
+        </div>
+      </div>
+
+      {/* 列表 */}
+      <div className="flex-1 overflow-y-auto scrollbar-thin">
+        {filtered.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-40 text-gray-300">
+            <p className="text-sm">暂无记录</p>
+          </div>
+        ) : (
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 sticky top-0">
+              <tr>
+                <th className="text-left px-4 py-3 text-gray-500 font-medium">日期</th>
+                <th className="text-left px-4 py-3 text-gray-500 font-medium">项目</th>
+                <th className="text-left px-4 py-3 text-gray-500 font-medium">工作内容</th>
+                <th className="text-right px-4 py-3 text-gray-500 font-medium">工时</th>
+                <th className="px-4 py-3"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((rec, idx) => (
+                <tr key={rec.id} className={`border-t border-gray-50 hover:bg-blue-50 group ${idx % 2 === 0 ? '' : 'bg-gray-50'}`}>
+                  <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{rec.date}</td>
+                  <td className="px-4 py-3 font-medium text-gray-700 whitespace-nowrap">{rec.project}</td>
+                  <td className="px-4 py-3 text-gray-600">{rec.content}</td>
+                  <td className="px-4 py-3 text-right font-medium text-blue-600 whitespace-nowrap">{rec.hours}h</td>
+                  <td className="px-4 py-3">
+                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 justify-end">
+                      <button onClick={() => setEditRecord(rec)} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-100 rounded">
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                      </button>
+                      <button onClick={() => setDeleteConfirm(rec.id)} className="p-1.5 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded">
+                        <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {editRecord && (
+        <Modal title="编辑记录" onClose={() => setEditRecord(null)}>
+          <WorkRecordForm record={editRecord} date={editRecord.date} projects={projects} onSave={handleSave} onClose={() => setEditRecord(null)} />
+        </Modal>
+      )}
+      {deleteConfirm && (
+        <Modal title="确认删除" onClose={() => setDeleteConfirm(null)}>
+          <p className="text-gray-600 mb-6">确定要删除这条工作记录吗？</p>
+          <div className="flex justify-end gap-2">
+            <button onClick={() => setDeleteConfirm(null)} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
+            <button onClick={() => { setWorkRecords(workRecords.filter(r => r.id !== deleteConfirm)); setDeleteConfirm(null); }} className="px-4 py-2 text-sm bg-red-500 text-white rounded-lg hover:bg-red-600">删除</button>
+          </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// 项目汇总页面
+// ─────────────────────────────────────────
+function ProjectSummaryPage({ workRecords }) {
+  const now = new Date();
+  const [startDate, setStartDate] = useState(`${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-01`);
+  const [endDate, setEndDate] = useState(today());
+
+  const stats = useMemo(() => {
+    const filtered = workRecords.filter(r => r.date >= startDate && r.date <= endDate);
+    const byProject = {};
+    filtered.forEach(r => {
+      if (!byProject[r.project]) byProject[r.project] = { hours: 0, dates: new Set() };
+      byProject[r.project].hours += r.hours;
+      byProject[r.project].dates.add(r.date);
+    });
+    return Object.entries(byProject)
+      .map(([project, d]) => ({ project, hours: d.hours, days: d.dates.size, avgHours: (d.hours / d.dates.size).toFixed(1) }))
+      .sort((a, b) => b.hours - a.hours);
+  }, [workRecords, startDate, endDate]);
+
+  const totalHours = stats.reduce((s, r) => s + r.hours, 0);
+  const maxHours = stats[0]?.hours || 1;
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col h-full">
+      <div className="p-5 border-b border-gray-100">
+        <div className="flex items-center gap-4 flex-wrap">
+          <h2 className="font-semibold text-gray-800">项目工时汇总</h2>
+          <div className="flex items-center gap-2">
+            <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" value={startDate} onChange={e => setStartDate(e.target.value)} />
+            <span className="text-gray-400">至</span>
+            <input type="date" className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300" value={endDate} onChange={e => setEndDate(e.target.value)} />
+          </div>
+          {totalHours > 0 && <span className="text-sm text-gray-500">总计 <strong className="text-blue-600">{totalHours.toFixed(1)}h</strong>，共 <strong className="text-gray-700">{stats.length}</strong> 个项目</span>}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-5 scrollbar-thin">
+        {stats.length === 0 ? (
+          <div className="flex flex-col items-center justify-center h-40 text-gray-300">
+            <p className="text-sm">所选时间范围内暂无记录</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {stats.map((s, idx) => (
+              <div key={s.project} className="border border-gray-100 rounded-xl p-4 hover:border-blue-200 hover:bg-blue-50 transition-colors">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-gray-400 w-5">#{idx+1}</span>
+                    <span className="font-semibold text-gray-800">{s.project}</span>
+                  </div>
+                  <div className="flex gap-4 text-sm">
+                    <span className="text-gray-500">工时 <strong className="text-blue-600">{s.hours.toFixed(1)}h</strong></span>
+                    <span className="text-gray-500">天数 <strong className="text-gray-700">{s.days}天</strong></span>
+                    <span className="text-gray-500">日均 <strong className="text-gray-700">{s.avgHours}h</strong></span>
+                  </div>
+                </div>
+                {/* 进度条 */}
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div className="h-full bg-blue-400 rounded-full transition-all" style={{width:`${(s.hours/maxHours)*100}%`}}></div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// GitHub Gist 同步配置组件
+// ─────────────────────────────────────────
+function GistSyncSection({ gistConfig, setGistConfig, onLoad, onSave, workRecords, weeklyReports, syncStatus, syncMsg, syncTime }) {
+  const [token, setToken] = useState(gistConfig.token || '');
+  const [gistId, setGistId] = useState(gistConfig.gistId || '');
+  const [opStatus, setOpStatus] = useState(''); // 操作反馈
+  const [opLoading, setOpLoading] = useState(''); // 'init'|'load'|'save'|''
+  const [showToken, setShowToken] = useState(false);
+
+  const isConfigured = !!gistConfig.token && !!gistConfig.gistId;
+  const hasLocalChange = token !== gistConfig.token || gistId !== gistConfig.gistId;
+
+  const saveConfig = () => {
+    setGistConfig({ token: token.trim(), gistId: gistId.trim() });
+    setOpStatus('✓ 配置已保存');
+    setTimeout(() => setOpStatus(''), 2000);
+  };
+
+  // 初始化：在 GitHub 创建一个新 Gist 并保存当前数据
+  const handleInit = async () => {
+    if (!token.trim()) { setOpStatus('✗ 请先填写 Token'); return; }
+    setOpLoading('init');
+    setOpStatus('');
+    try {
+      const newId = await gistCreate(token.trim());
+      await gistSave(token.trim(), newId, workRecords, weeklyReports);
+      setGistId(newId);
+      setGistConfig({ token: token.trim(), gistId: newId });
+      setOpStatus('✓ 初始化成功，数据已上传');
+    } catch (e) {
+      setOpStatus(`✗ 初始化失败：${e.message}`);
+    } finally {
+      setOpLoading('');
+    }
+  };
+
+  // 从云端加载（覆盖本地）
+  const handleLoad = async () => {
+    if (!token.trim() || !gistId.trim()) { setOpStatus('✗ 请先填写 Token 和 Gist ID'); return; }
+    if (!window.confirm('从云端加载会覆盖本地数据，确定继续？')) return;
+    setOpLoading('load');
+    setOpStatus('');
+    try {
+      await onLoad(token.trim(), gistId.trim(), false);
+      setOpStatus('✓ 已从云端加载数据');
+    } catch (e) {
+      setOpStatus(`✗ 加载失败：${e.message}`);
+    } finally {
+      setOpLoading('');
+    }
+  };
+
+  // 立即上传到云端
+  const handleSave = async () => {
+    if (!token.trim() || !gistId.trim()) { setOpStatus('✗ 请先填写 Token 和 Gist ID'); return; }
+    setOpLoading('save');
+    setOpStatus('');
+    try {
+      await onSave(token.trim(), gistId.trim(), workRecords, weeklyReports);
+      setOpStatus('✓ 已上传到云端');
+    } catch (e) {
+      setOpStatus(`✗ 上传失败：${e.message}`);
+    } finally {
+      setOpLoading('');
+    }
+  };
+
+  const statusColor = { synced: 'text-green-500', error: 'text-red-400', syncing: 'text-blue-400', loading: 'text-blue-400' };
+
+  return (
+    <div className="border border-gray-200 rounded-xl p-5 space-y-4">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="font-medium text-gray-700">数据云同步</h3>
+          <p className="text-xs text-gray-400 mt-0.5">通过 GitHub Gist 跨设备保存工作记录</p>
+        </div>
+        {isConfigured && (
+          <div className={`text-xs font-medium ${statusColor[syncStatus] || 'text-gray-400'}`}>
+            {syncStatus === 'synced' && syncTime ? `✓ 已同步 ${syncTime.toLocaleTimeString()}` : ''}
+            {syncStatus === 'syncing' ? '↻ 同步中…' : ''}
+            {syncStatus === 'loading' ? '↻ 加载中…' : ''}
+            {syncStatus === 'error' ? `✗ ${syncMsg}` : ''}
+            {syncStatus === 'idle' && isConfigured ? '待同步' : ''}
+          </div>
+        )}
+      </div>
+
+      {/* Step 1：获取 Token 说明 */}
+      <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs text-blue-700 space-y-1">
+        <p className="font-medium">第一步：获取 GitHub Token</p>
+        <p>前往 <a href="https://github.com/settings/tokens/new?scopes=gist&description=周报助手" target="_blank" rel="noopener" className="underline font-medium">github.com → Settings → Tokens → New token</a></p>
+        <p>权限只需勾选 <strong>gist</strong>，生成后复制 token 填入下方。</p>
+      </div>
+
+      {/* Token 输入 */}
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">GitHub Personal Access Token</label>
+        <div className="flex gap-2">
+          <input
+            type={showToken ? 'text' : 'password'}
+            className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 font-mono"
+            placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
+            value={token}
+            onChange={e => setToken(e.target.value)}
+          />
+          <button onClick={() => setShowToken(v => !v)} className="px-3 py-2 border border-gray-200 rounded-lg text-xs text-gray-500 hover:bg-gray-50">
+            {showToken ? '隐藏' : '显示'}
+          </button>
+        </div>
+      </div>
+
+      {/* Gist ID */}
+      <div>
+        <label className="block text-xs font-medium text-gray-500 mb-1">
+          Gist ID
+          <span className="text-gray-400 font-normal ml-1">（首次使用点「初始化」自动生成）</span>
+        </label>
+        <input
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
+          placeholder="留空后点「初始化」自动创建"
+          value={gistId}
+          onChange={e => setGistId(e.target.value)}
+        />
+      </div>
+
+      {/* 操作按钮 */}
+      <div className="flex flex-wrap gap-2 pt-1">
+        {hasLocalChange && (
+          <button onClick={saveConfig} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+            保存配置
+          </button>
+        )}
+        {!gistId && token && (
+          <button onClick={handleInit} disabled={!!opLoading} className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50">
+            {opLoading === 'init' ? '初始化中…' : '🚀 初始化（首次使用）'}
+          </button>
+        )}
+        {isConfigured && (
+          <>
+            <button onClick={handleSave} disabled={!!opLoading} className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+              {opLoading === 'save' ? '上传中…' : '↑ 立即上传'}
+            </button>
+            <button onClick={handleLoad} disabled={!!opLoading} className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50">
+              {opLoading === 'load' ? '加载中…' : '↓ 从云端恢复'}
+            </button>
+          </>
+        )}
+      </div>
+
+      {opStatus && (
+        <p className={`text-xs ${opStatus.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>{opStatus}</p>
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// 设置页面
+// ─────────────────────────────────────────
+function SettingsPage({ settings, setSettings, gistConfig, setGistConfig, onLoadFromGist, onSaveToGist, workRecords, weeklyReports, syncStatus, syncMsg, syncTime }) {
+  const providers = settings.llm.providers || DEFAULT_PROVIDERS;
+  const [activeId, setActiveId] = useState(providers[0]?.id || '');
+  const [testResult, setTestResult] = useState({});   // { [id]: '✓ ...' | '✗ ...' }
+  const [testing, setTesting] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const activeCfg = providers.find(p => p.id === activeId);
+
+  // 更新某个 provider 的某个字段
+  const updateProvider = (id, field, val) => {
+    setSettings({
+      ...settings,
+      llm: {
+        ...settings.llm,
+        providers: providers.map(p => p.id === id ? { ...p, [field]: val } : p),
+      },
+    });
+  };
+
+  // 添加新 provider
+  const addProvider = (data) => {
+    const newId = uid();
+    const newP = { id: newId, label: data.label, apiKey: '', model: data.model || '', baseUrl: data.baseUrl || '', apiType: data.apiType || 'openai' };
+    setSettings({ ...settings, llm: { ...settings.llm, providers: [...providers, newP] } });
+    setActiveId(newId);
+    setShowAddModal(false);
+  };
+
+  // 删除 provider
+  const deleteProvider = (id) => {
+    if (providers.length <= 1) return;
+    if (!window.confirm('确定删除该 LLM 配置？')) return;
+    const next = providers.filter(p => p.id !== id);
+    const newDefault = settings.llm.default === id ? next[0].id : settings.llm.default;
+    setSettings({ ...settings, llm: { ...settings.llm, providers: next, default: newDefault } });
+    setActiveId(next[0].id);
+    setTestResult(r => { const c = {...r}; delete c[id]; return c; });
+  };
+
+  // 测试连接
+  const handleTest = async (id) => {
+    setTesting(true);
+    setTestResult(r => ({ ...r, [id]: '' }));
+    try {
+      const settingsCopy = { ...settings, llm: { ...settings.llm, default: id } };
+      const result = await callAI(settingsCopy, '请回复"连接成功"');
+      setTestResult(r => ({ ...r, [id]: `✓ 连接成功：${result.slice(0, 40)}` }));
+    } catch (e) {
+      setTestResult(r => ({ ...r, [id]: `✗ ${e.message}` }));
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleSave = () => { setSaved(true); setTimeout(() => setSaved(false), 2000); };
+
+  return (
+    <div className="bg-white rounded-xl shadow-sm border border-gray-100 max-w-2xl h-full overflow-y-auto scrollbar-thin">
+      <div className="p-6 border-b border-gray-100">
+        <h2 className="font-semibold text-gray-800 text-lg">设置</h2>
+      </div>
+
+      <div className="p-6 space-y-8">
+
+        {/* ── LLM 配置 ── */}
+        <div>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-medium text-gray-700">LLM 配置</h3>
+            <button onClick={() => setShowAddModal(true)} className="flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700 border border-blue-200 hover:border-blue-400 px-3 py-1.5 rounded-lg transition-colors">
+              <span className="text-base leading-none">+</span> 添加
+            </button>
+          </div>
+
+          {/* 标签页 */}
+          <div className="flex gap-1 flex-wrap border-b border-gray-200 mb-5">
+            {providers.map(p => (
+              <button
+                key={p.id}
+                onClick={() => { setActiveId(p.id); }}
+                className={`relative px-3 py-2 text-sm font-medium border-b-2 transition-colors flex items-center gap-1.5 ${activeId === p.id ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700'}`}
+              >
+                {p.label}
+                {p.id === settings.llm.default && (
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block" title="默认"></span>
+                )}
+                {p.apiKey && <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" title="已配置"></span>}
+              </button>
+            ))}
+          </div>
+
+          {/* 编辑表单 */}
+          {activeCfg && (
+            <div className="space-y-4 fade-in">
+              {/* 名称 + API类型 */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">显示名称</label>
+                  <input
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    value={activeCfg.label}
+                    onChange={e => updateProvider(activeId, 'label', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">接口类型</label>
+                  <select
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    value={activeCfg.apiType || 'openai'}
+                    onChange={e => updateProvider(activeId, 'apiType', e.target.value)}
+                  >
+                    <option value="openai">OpenAI 兼容</option>
+                    <option value="claude">Claude (Anthropic)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* API Key */}
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">API Key</label>
+                <input
+                  type="password"
+                  className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  placeholder="sk-..."
+                  value={activeCfg.apiKey || ''}
+                  onChange={e => updateProvider(activeId, 'apiKey', e.target.value)}
+                />
+              </div>
+
+              {/* 模型 + API地址 */}
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">模型名称</label>
+                  <input
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    placeholder="model-name"
+                    value={activeCfg.model || ''}
+                    onChange={e => updateProvider(activeId, 'model', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">API 地址</label>
+                  <input
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    placeholder="https://api.example.com/v1"
+                    value={activeCfg.baseUrl || ''}
+                    onChange={e => updateProvider(activeId, 'baseUrl', e.target.value)}
+                  />
+                </div>
+              </div>
+
+              {/* 操作栏 */}
+              <div className="flex items-center gap-2 flex-wrap pt-1">
+                <button
+                  onClick={() => handleTest(activeId)}
+                  disabled={testing || !activeCfg.apiKey}
+                  className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+                >
+                  {testing ? '测试中...' : '测试连接'}
+                </button>
+                {settings.llm.default !== activeId ? (
+                  <button
+                    onClick={() => setSettings({ ...settings, llm: { ...settings.llm, default: activeId } })}
+                    className="px-3 py-1.5 text-sm border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50"
+                  >
+                    设为默认
+                  </button>
+                ) : (
+                  <span className="px-3 py-1.5 text-sm bg-blue-50 text-blue-600 rounded-lg border border-blue-200">当前默认 ✓</span>
+                )}
+                {providers.length > 1 && (
+                  <button
+                    onClick={() => deleteProvider(activeId)}
+                    className="ml-auto px-3 py-1.5 text-sm text-red-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 rounded-lg"
+                  >
+                    删除
+                  </button>
+                )}
+              </div>
+
+              {testResult[activeId] && (
+                <div className={`text-sm px-3 py-2 rounded-lg ${testResult[activeId].startsWith('✓') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
+                  {testResult[activeId]}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── GitHub Gist 数据同步 ── */}
+        <GistSyncSection
+          gistConfig={gistConfig} setGistConfig={setGistConfig}
+          onLoad={onLoadFromGist} onSave={onSaveToGist}
+          workRecords={workRecords} weeklyReports={weeklyReports}
+          syncStatus={syncStatus} syncMsg={syncMsg} syncTime={syncTime}
+        />
+
+        {/* ── 默认工时 ── */}
+        <div>
+          <h3 className="font-medium text-gray-700 mb-3">默认工时设置</h3>
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-gray-600">每天标准工时（小时）</label>
+            <input
+              type="number" min="1" max="24" step="0.5"
+              className="border border-gray-200 rounded-lg px-3 py-2 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-blue-300"
+              value={settings.defaultHours}
+              onChange={e => setSettings({ ...settings, defaultHours: parseFloat(e.target.value) })}
+            />
+          </div>
+        </div>
+
+        {/* ── 自动提醒 ── */}
+        <div>
+          <h3 className="font-medium text-gray-700 mb-3">自动生成提醒</h3>
+          <div className="space-y-3">
+            <label className="flex items-center gap-3 cursor-pointer">
+              <div className={`relative w-10 h-6 rounded-full transition-colors ${settings.autoGenerate.enabled ? 'bg-blue-600' : 'bg-gray-200'}`}
+                onClick={() => setSettings({ ...settings, autoGenerate: { ...settings.autoGenerate, enabled: !settings.autoGenerate.enabled } })}>
+                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${settings.autoGenerate.enabled ? 'left-5' : 'left-1'}`}></div>
+              </div>
+              <span className="text-sm text-gray-600">周五自动提醒生成周报</span>
+            </label>
+            {settings.autoGenerate.enabled && (
+              <div className="flex items-center gap-3 pl-1">
+                <label className="text-sm text-gray-600">提醒时间</label>
+                <input
+                  type="time"
+                  className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  value={settings.autoGenerate.time}
+                  onChange={e => setSettings({ ...settings, autoGenerate: { ...settings.autoGenerate, time: e.target.value } })}
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        <button onClick={handleSave} className={`px-6 py-2 text-sm rounded-lg font-medium ${saved ? 'bg-green-500 text-white' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+          {saved ? '已保存 ✓' : '保存设置'}
+        </button>
+      </div>
+
+      {/* 添加 LLM 弹窗 */}
+      {showAddModal && <AddProviderModal onAdd={addProvider} onClose={() => setShowAddModal(false)} />}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// 添加 LLM 提供商弹窗
+// ─────────────────────────────────────────
+function AddProviderModal({ onAdd, onClose }) {
+  const presets = [
+    { label: 'DeepSeek',    model: 'deepseek-chat',            baseUrl: 'https://api.deepseek.com/v1',           apiType: 'openai' },
+    { label: 'OpenAI',      model: 'gpt-4o-mini',              baseUrl: 'https://api.openai.com/v1',             apiType: 'openai' },
+    { label: 'Claude',      model: 'claude-sonnet-4-20250514', baseUrl: 'https://api.anthropic.com/v1',          apiType: 'claude' },
+    { label: '智谱 GLM',    model: 'glm-4-flash',              baseUrl: 'https://open.bigmodel.cn/api/paas/v4',  apiType: 'openai' },
+    { label: 'Kimi',        model: 'moonshot-v1-8k',           baseUrl: 'https://api.moonshot.cn/v1',            apiType: 'openai' },
+    { label: 'Ollama',      model: 'llama3',                   baseUrl: 'http://localhost:11434/v1',              apiType: 'openai' },
+    { label: 'Groq',        model: 'llama-3.3-70b-versatile',  baseUrl: 'https://api.groq.com/openai/v1',        apiType: 'openai' },
+    { label: '自定义',      model: '',                         baseUrl: '',                                       apiType: 'openai' },
+  ];
+  const [form, setForm] = useState({ label: '', model: '', baseUrl: '', apiType: 'openai' });
+  const [selected, setSelected] = useState(null);
+
+  const pickPreset = (p) => {
+    setSelected(p.label);
+    setForm({ label: p.label, model: p.model, baseUrl: p.baseUrl, apiType: p.apiType });
+  };
+
+  const handleAdd = () => {
+    if (!form.label.trim()) { alert('请填写名称'); return; }
+    onAdd(form);
+  };
+
+  return (
+    <Modal title="添加 LLM 提供商" onClose={onClose} width="max-w-lg">
+      <div className="space-y-5">
+        {/* 预设快选 */}
+        <div>
+          <div className="text-xs font-medium text-gray-500 mb-2">从预设快速选择</div>
+          <div className="grid grid-cols-4 gap-2">
+            {presets.map(p => (
+              <button
+                key={p.label}
+                onClick={() => pickPreset(p)}
+                className={`px-2 py-2 text-xs rounded-lg border text-center transition-colors ${selected === p.label ? 'bg-blue-600 border-blue-600 text-white' : 'border-gray-200 text-gray-600 hover:border-blue-300 hover:text-blue-600'}`}
+              >
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="border-t border-gray-100 pt-4 space-y-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">显示名称 <span className="text-red-400">*</span></label>
+              <input
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                placeholder="例：My LLM"
+                value={form.label}
+                onChange={e => setForm({...form, label: e.target.value})}
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-500 mb-1">接口类型</label>
+              <select
+                className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                value={form.apiType}
+                onChange={e => setForm({...form, apiType: e.target.value})}
+              >
+                <option value="openai">OpenAI 兼容</option>
+                <option value="claude">Claude (Anthropic)</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">模型名称</label>
+            <input
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              placeholder="model-name"
+              value={form.model}
+              onChange={e => setForm({...form, model: e.target.value})}
+            />
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-500 mb-1">API 地址</label>
+            <input
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              placeholder="https://api.example.com/v1"
+              value={form.baseUrl}
+              onChange={e => setForm({...form, baseUrl: e.target.value})}
+            />
+          </div>
+        </div>
+
+        <div className="flex justify-end gap-2 pt-1">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
+          <button onClick={handleAdd} className="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">添加</button>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─────────────────────────────────────────
+// 侧边导航
+// ─────────────────────────────────────────
+function Sidebar({ activePage, setActivePage }) {
+  const items = [
+    { id: 'workbench', label: '工作台', icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" strokeWidth="2"/><line x1="16" y1="2" x2="16" y2="6" strokeWidth="2" strokeLinecap="round"/><line x1="8" y1="2" x2="8" y2="6" strokeWidth="2" strokeLinecap="round"/><line x1="3" y1="10" x2="21" y2="10" strokeWidth="2"/></svg>
+    )},
+    { id: 'report', label: '周报', icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+    )},
+    { id: 'detail', label: '明细', icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 10h16M4 14h16M4 18h16" /></svg>
+    )},
+    { id: 'summary', label: '汇总', icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+    )},
+    { id: 'settings', label: '设置', icon: (
+      <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+    )},
+  ];
+
+  return (
+    <div className="flex flex-col h-full" style={{width:'68px',background:'#1e293b',flexShrink:0}}>
+      {/* Logo */}
+      <div className="flex items-center justify-center h-16 border-b border-slate-700">
+        <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center text-white font-bold text-sm">周</div>
+      </div>
+
+      {/* 导航 */}
+      <nav className="flex-1 py-4 flex flex-col gap-1 px-2">
+        {items.map(item => (
+          <button
+            key={item.id}
+            onClick={() => setActivePage(item.id)}
+            className={`flex flex-col items-center gap-1 p-2 rounded-lg transition-colors text-xs ${activePage === item.id ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-700 hover:text-white'}`}
+          >
+            {item.icon}
+            <span>{item.label}</span>
+          </button>
+        ))}
+      </nav>
+
+      {/* 底部版本 */}
+      <div className="pb-4 text-center text-slate-600 text-xs">v1.0</div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
+// 主 App
+// ─────────────────────────────────────────
+function App() {
+  const [activePage, setActivePage] = useState('workbench');
+  const [workRecords, setWorkRecordsRaw] = useStorage('workRecords', []);
+  const [weeklyReports, setWeeklyReportsRaw] = useStorage('weeklyReports', []);
+  const [settings, setSettingsRaw] = useStorage('settings', defaultSettings);
+  const [gistConfig, setGistConfigRaw] = useStorage('gistConfig', { token: '', gistId: '' });
+
+  // 同步状态：idle | loading | syncing | synced | error
+  const [syncStatus, setSyncStatus] = useState('idle');
+  const [syncMsg, setSyncMsg] = useState('');
+  const [syncTime, setSyncTime] = useState(null);
+  const autoSaveTimer = useRef(null);
+  const isMounted = useRef(true);
+
+  useEffect(() => { isMounted.current = true; return () => { isMounted.current = false; }; }, []);
+
+  // 合并设置（兼容旧格式）
+  const mergedSettings = useMemo(() => {
+    const s = { ...defaultSettings, ...settings };
+    if (settings.llm && !settings.llm.providers) {
+      const migratedProviders = DEFAULT_PROVIDERS.map(p => ({ ...p, ...(settings.llm[p.id] || {}) }));
+      s.llm = { default: settings.llm.default || 'deepseek', providers: migratedProviders };
+    } else {
+      s.llm = { ...defaultSettings.llm, ...settings.llm };
+    }
+    return s;
+  }, [settings]);
+
+  const setWorkRecords = (v) => setWorkRecordsRaw(typeof v === 'function' ? v(workRecords) : v);
+  const setWeeklyReports = (v) => setWeeklyReportsRaw(typeof v === 'function' ? v(weeklyReports) : v);
+  const setSettings = (v) => setSettingsRaw(typeof v === 'function' ? v(settings) : v);
+  const setGistConfig = (v) => setGistConfigRaw(typeof v === 'function' ? v(gistConfig) : v);
+
+  // ── 从 Gist 加载数据（启动时 + 手动）──
+  const loadFromGist = useCallback(async (token, gistId, quiet = false) => {
+    if (!token || !gistId) return;
+    if (!quiet) setSyncStatus('loading');
+    try {
+      const data = await gistLoad(token, gistId);
+      if (data.workRecords) setWorkRecordsRaw(data.workRecords);
+      if (data.weeklyReports) setWeeklyReportsRaw(data.weeklyReports);
+      setSyncStatus('synced');
+      setSyncTime(new Date());
+      setSyncMsg('');
+    } catch (e) {
+      setSyncStatus('error');
+      setSyncMsg(e.message);
+    }
+  }, []);
+
+  // ── 保存到 Gist ──
+  const saveToGist = useCallback(async (token, gistId, wr, wpr) => {
+    if (!token || !gistId) return;
+    setSyncStatus('syncing');
+    try {
+      await gistSave(token, gistId, wr, wpr);
+      if (isMounted.current) { setSyncStatus('synced'); setSyncTime(new Date()); setSyncMsg(''); }
+    } catch (e) {
+      if (isMounted.current) { setSyncStatus('error'); setSyncMsg(e.message); }
+    }
+  }, []);
+
+  // 启动时自动从 Gist 加载
+  useEffect(() => {
+    if (gistConfig.token && gistConfig.gistId) {
+      loadFromGist(gistConfig.token, gistConfig.gistId, false);
+    }
+  }, []); // 只在挂载时执行一次
+
+  // 数据变化时自动保存（防抖 3s）
+  useEffect(() => {
+    if (!gistConfig.token || !gistConfig.gistId) return;
+    if (syncStatus === 'loading') return; // 正在加载中，不触发保存
+    clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(() => {
+      saveToGist(gistConfig.token, gistConfig.gistId, workRecords, weeklyReports);
+    }, 3000);
+    return () => clearTimeout(autoSaveTimer.current);
+  }, [workRecords, weeklyReports, gistConfig.token, gistConfig.gistId]);
+
+  const pageTitle = { workbench: '工作台', report: '周报管理', detail: '工作明细', summary: '项目汇总', settings: '设置' };
+
+  // 同步状态图标
+  const SyncIndicator = () => {
+    if (!gistConfig.token || !gistConfig.gistId) return null;
+    const label = { loading: '加载中…', syncing: '同步中…', synced: '已同步', error: '同步失败', idle: '' }[syncStatus] || '';
+    const color = { loading: 'text-blue-400', syncing: 'text-blue-400', synced: 'text-green-500', error: 'text-red-400', idle: 'text-gray-300' }[syncStatus];
+    const icon = { loading: '↻', syncing: '↻', synced: '✓', error: '✗', idle: '○' }[syncStatus];
+    const spin = syncStatus === 'loading' || syncStatus === 'syncing';
+    return (
+      <div
+        className={`flex items-center gap-1.5 text-xs ${color} cursor-pointer`}
+        title={syncStatus === 'error' ? syncMsg : syncTime ? `上次同步：${syncTime.toLocaleTimeString()}` : ''}
+        onClick={() => saveToGist(gistConfig.token, gistConfig.gistId, workRecords, weeklyReports)}
+      >
+        <span className={spin ? 'animate-spin inline-block' : ''}>{icon}</span>
+        <span>{label}</span>
+      </div>
+    );
+  };
+
+  return (
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar activePage={activePage} setActivePage={setActivePage} />
+
+      <div className="flex-1 flex flex-col overflow-hidden bg-gray-50">
+        {/* 顶部 */}
+        <div className="h-14 flex items-center px-6 bg-white border-b border-gray-100 shadow-sm gap-4">
+          <h1 className="text-base font-semibold text-gray-800">{pageTitle[activePage]}</h1>
+          <div className="ml-auto flex items-center gap-4">
+            <SyncIndicator />
+            <span className="text-sm text-gray-400">{today()}</span>
+          </div>
+        </div>
+
+        {/* 内容区 */}
+        <div className="flex-1 overflow-hidden p-5">
+          <div className="h-full">
+            {activePage === 'workbench' && (
+              <WorkbenchPage workRecords={workRecords} setWorkRecords={setWorkRecords} settings={mergedSettings} />
+            )}
+            {activePage === 'report' && (
+              <WeeklyReportPage workRecords={workRecords} weeklyReports={weeklyReports} setWeeklyReports={setWeeklyReports} settings={mergedSettings} />
+            )}
+            {activePage === 'detail' && (
+              <WorkDetailPage workRecords={workRecords} setWorkRecords={setWorkRecords} />
+            )}
+            {activePage === 'summary' && (
+              <ProjectSummaryPage workRecords={workRecords} />
+            )}
+            {activePage === 'settings' && (
+              <SettingsPage
+                settings={mergedSettings} setSettings={setSettings}
+                gistConfig={gistConfig} setGistConfig={setGistConfig}
+                onLoadFromGist={loadFromGist} onSaveToGist={saveToGist}
+                workRecords={workRecords} weeklyReports={weeklyReports}
+                syncStatus={syncStatus} syncMsg={syncMsg} syncTime={syncTime}
+              />
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
