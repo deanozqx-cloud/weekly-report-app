@@ -795,7 +795,7 @@ function EditableSelect({ value, options, onChange, onAddOption, placeholder = '
         <span className="text-gray-400 shrink-0">▾</span>
       </button>
       {open && (
-        <div className="absolute z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-1 w-full" style={{minWidth:'130px'}}>
+        <div className="absolute z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-1" style={{minWidth:'160px', right:0}}>
           <div className="max-h-44 overflow-y-auto">
             {options.map(o => (
               <div key={o}
