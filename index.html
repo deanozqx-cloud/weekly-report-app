@@ -8,7 +8,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/leancloud-storage@4/dist/av-min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
@@ -193,50 +193,31 @@ async function callAI(settings, prompt) {
 }
 
 // ─────────────────────────────────────────
-// LeanCloud 配置（在 leancloud.cn 控制台创建应用后填入）
+// Supabase 配置（在 supabase.com 控制台创建项目后填入）
 // ─────────────────────────────────────────
-const LC_APP_ID     = 'YOUR_APP_ID';      // 控制台 → 应用 → 设置 → 应用凭证
-const LC_APP_KEY    = 'YOUR_APP_KEY';
-const LC_SERVER_URL = 'YOUR_SERVER_URL';  // 如 https://xxxxxxxx.lc-cn-n1-shared.com
+const SUPABASE_URL      = 'YOUR_SUPABASE_URL';       // 控制台 → Settings → API → Project URL
+const SUPABASE_ANON_KEY = 'YOUR_SUPABASE_ANON_KEY';  // 控制台 → Settings → API → anon public
 
-AV.init({ appId: LC_APP_ID, appKey: LC_APP_KEY, serverURL: LC_SERVER_URL });
+const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// 获取（或初始化）当前用户的数据对象
-async function lcGetDataObj() {
-  const user = AV.User.current();
-  const query = new AV.Query('UserData');
-  query.equalTo('user', user);
-  let obj = await query.first();
-  if (!obj) {
-    obj = new AV.Object('UserData');
-    obj.set('user', user);
-    const acl = new AV.ACL(user);
-    acl.setPublicReadAccess(false);
-    obj.setACL(acl);
-  }
-  return obj;
-}
-
-async function lcLoad() {
-  const user = AV.User.current();
-  if (!user) return null;
-  const query = new AV.Query('UserData');
-  query.equalTo('user', user);
-  const obj = await query.first();
-  if (!obj) return { workRecords: [], weeklyReports: [] };
+async function sbLoad() {
+  const { data, error } = await sb.from('user_data').select('*').maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return { workRecords: [], weeklyReports: [] };
   return {
-    workRecords:   obj.get('workRecords')   || [],
-    weeklyReports: obj.get('weeklyReports') || [],
+    workRecords:   data.work_records   || [],
+    weeklyReports: data.weekly_reports || [],
   };
 }
 
-async function lcSave(workRecords, weeklyReports) {
-  if (!AV.User.current()) throw new Error('未登录');
-  const obj = await lcGetDataObj();
-  obj.set('workRecords',   workRecords);
-  obj.set('weeklyReports', weeklyReports);
-  obj.set('lastUpdated',   new Date().toISOString());
-  await obj.save();
+async function sbSave(workRecords, weeklyReports) {
+  const { data: { user } } = await sb.auth.getUser();
+  if (!user) throw new Error('未登录');
+  const { error } = await sb.from('user_data').upsert(
+    { user_id: user.id, work_records: workRecords, weekly_reports: weeklyReports, updated_at: new Date().toISOString() },
+    { onConflict: 'user_id' }
+  );
+  if (error) throw new Error(error.message);
 }
 
 function buildReportPrompt(weekStart, records, defaultHours) {
@@ -1338,9 +1319,9 @@ function ProjectSummaryPage({ workRecords }) {
 // ─────────────────────────────────────────
 // 用户信息面板（设置页内）
 // ─────────────────────────────────────────
-function LcUserSection({ currentUser, syncStatus, syncMsg, syncTime, onManualSync, onLogout }) {
-  const displayName = currentUser?.get('displayName') || currentUser?.getUsername() || '用户';
-  const email = currentUser?.getEmail() || currentUser?.getUsername() || '';
+function SbUserSection({ currentUser, syncStatus, syncMsg, syncTime, onManualSync, onLogout }) {
+  const displayName = currentUser?.user_metadata?.display_name || currentUser?.email || '用户';
+  const email = currentUser?.email || '';
   const statusColor = { synced: 'text-green-500', error: 'text-red-400', syncing: 'text-blue-400', loading: 'text-blue-400', idle: 'text-gray-400' };
   const statusLabel = { synced: '✓ 已同步', error: `✗ ${syncMsg}`, syncing: '↻ 同步中…', loading: '↻ 加载中…', idle: '待同步' };
 
@@ -1349,7 +1330,7 @@ function LcUserSection({ currentUser, syncStatus, syncMsg, syncTime, onManualSyn
       <div className="flex items-center justify-between">
         <div>
           <h3 className="font-medium text-gray-700">账号与数据同步</h3>
-          <p className="text-xs text-gray-400 mt-0.5">数据存储于 LeanCloud，多设备自动同步</p>
+          <p className="text-xs text-gray-400 mt-0.5">数据存储于 Supabase，多设备自动同步</p>
         </div>
         <div className={`text-xs font-medium ${statusColor[syncStatus]}`}>{statusLabel[syncStatus]}</div>
       </div>
@@ -1580,7 +1561,7 @@ function SettingsPage({ settings, setSettings, currentUser, syncStatus, syncMsg,
         </div>
 
         {/* ── 账号与数据同步 ── */}
-        <LcUserSection
+        <SbUserSection
           currentUser={currentUser}
           syncStatus={syncStatus} syncMsg={syncMsg} syncTime={syncTime}
           onManualSync={onManualSync} onLogout={onLogout}
@@ -1750,24 +1731,30 @@ function AuthPage({ onLogin }) {
     setLoading(true);
     setError('');
     try {
-      let user;
       if (mode === 'login') {
-        user = await AV.User.logIn(email.trim(), password);
+        const { data, error } = await sb.auth.signInWithPassword({ email: email.trim(), password });
+        if (error) throw error;
+        onLogin(data.user);
       } else {
         if (!displayName.trim()) { setError('请填写姓名'); setLoading(false); return; }
-        const u = new AV.User();
-        u.setUsername(email.trim());
-        u.setPassword(password);
-        u.setEmail(email.trim());
-        u.set('displayName', displayName.trim());
-        user = await u.signUp();
+        const { data, error } = await sb.auth.signUp({
+          email: email.trim(),
+          password,
+          options: { data: { display_name: displayName.trim() } },
+        });
+        if (error) throw error;
+        if (data.user && !data.session) {
+          setError('注册成功！请前往邮箱点击确认链接后再登录。');
+          setLoading(false);
+          return;
+        }
+        onLogin(data.user);
       }
-      onLogin(user);
     } catch (e) {
       const errorMap = {
-        'Invalid username or password': '邮箱或密码错误',
-        'Username has already been taken': '该邮箱已被注册',
-        'Email address is already associated with another user': '该邮箱已被注册',
+        'Invalid login credentials': '邮箱或密码错误',
+        'User already registered': '该邮箱已被注册',
+        'Email not confirmed': '邮箱尚未确认，请查收确认邮件',
       };
       setError(errorMap[e.message] || e.message);
     } finally {
@@ -1889,9 +1876,9 @@ function Sidebar({ activePage, setActivePage, currentUser }) {
         <button
           onClick={() => setActivePage('settings')}
           className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold text-sm hover:bg-blue-500"
-          title={currentUser?.get('displayName') || currentUser?.getUsername()}
+          title={currentUser?.user_metadata?.display_name || currentUser?.email}
         >
-          {(currentUser?.get('displayName') || currentUser?.getUsername() || '?')[0].toUpperCase()}
+          {(currentUser?.user_metadata?.display_name || currentUser?.email || '?')[0].toUpperCase()}
         </button>
       </div>
     </div>
@@ -1935,11 +1922,11 @@ function App() {
   const setWeeklyReports = (v) => setWeeklyReportsRaw(typeof v === 'function' ? v(weeklyReports) : v);
   const setSettings = (v) => setSettingsRaw(typeof v === 'function' ? v(settings) : v);
 
-  // ── 从 LC 加载数据 ──
-  const loadFromLC = useCallback(async () => {
+  // ── 从 Supabase 加载数据 ──
+  const loadData = useCallback(async () => {
     setSyncStatus('loading');
     try {
-      const data = await lcLoad();
+      const data = await sbLoad();
       if (data) {
         if (data.workRecords)   setWorkRecordsRaw(data.workRecords);
         if (data.weeklyReports) setWeeklyReportsRaw(data.weeklyReports);
@@ -1950,25 +1937,36 @@ function App() {
     }
   }, []);
 
-  // ── 保存到 LC ──
-  const saveToLC = useCallback(async (wr, wpr) => {
+  // ── 保存到 Supabase ──
+  const saveData = useCallback(async (wr, wpr) => {
     setSyncStatus('syncing');
     try {
-      await lcSave(wr, wpr);
+      await sbSave(wr, wpr);
       if (isMounted.current) { setSyncStatus('synced'); setSyncTime(new Date()); setSyncMsg(''); }
     } catch (e) {
       if (isMounted.current) { setSyncStatus('error'); setSyncMsg(e.message); }
     }
   }, []);
 
-  // 检查已有登录态
+  // 检查已有登录态（Supabase session 是异步的）
   useEffect(() => {
-    const user = AV.User.current();
-    if (user) {
-      setCurrentUser(user);
-      loadFromLC();
-    }
-    setAuthLoading(false);
+    sb.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setCurrentUser(session.user);
+        loadData();
+      }
+      setAuthLoading(false);
+    });
+    // 监听登录/登出事件（跨 tab 同步）
+    const { data: { subscription } } = sb.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setCurrentUser(null);
+        setWorkRecordsRaw([]);
+        setWeeklyReportsRaw([]);
+        setSyncStatus('idle');
+      }
+    });
+    return () => subscription.unsubscribe();
   }, []);
 
   // 数据变化时自动保存（防抖 3s）
@@ -1976,23 +1974,20 @@ function App() {
     if (!currentUser || syncStatus === 'loading') return;
     clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => {
-      saveToLC(workRecords, weeklyReports);
+      saveData(workRecords, weeklyReports);
     }, 3000);
     return () => clearTimeout(autoSaveTimer.current);
   }, [workRecords, weeklyReports]);
 
   const handleLogin = (user) => {
     setCurrentUser(user);
-    loadFromLC();
+    loadData();
   };
 
   const handleLogout = async () => {
     if (!window.confirm('确定退出登录？')) return;
-    await AV.User.logOut();
-    setCurrentUser(null);
-    setWorkRecordsRaw([]);
-    setWeeklyReportsRaw([]);
-    setSyncStatus('idle');
+    await sb.auth.signOut();
+    // onAuthStateChange 会处理状态清理
   };
 
   if (authLoading) {
@@ -2016,7 +2011,7 @@ function App() {
       <div
         className={`flex items-center gap-1.5 text-xs ${color} cursor-pointer`}
         title={syncStatus === 'error' ? syncMsg : syncTime ? `上次同步：${syncTime.toLocaleTimeString()}` : ''}
-        onClick={() => saveToLC(workRecords, weeklyReports)}
+        onClick={() => saveData(workRecords, weeklyReports)}
       >
         <span className={spin ? 'animate-spin inline-block' : ''}>{icon}</span>
         <span>{label}</span>
@@ -2058,7 +2053,7 @@ function App() {
                 settings={mergedSettings} setSettings={setSettings}
                 currentUser={currentUser}
                 syncStatus={syncStatus} syncMsg={syncMsg} syncTime={syncTime}
-                onManualSync={() => saveToLC(workRecords, weeklyReports)}
+                onManualSync={() => saveData(workRecords, weeklyReports)}
                 onLogout={handleLogout}
               />
             )}
