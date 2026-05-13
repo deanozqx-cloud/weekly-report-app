@@ -9,6 +9,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
@@ -757,7 +758,7 @@ function WorkbenchPage({ workRecords, setWorkRecords, settings }) {
 // ─────────────────────────────────────────
 // 周报编辑器
 // ─────────────────────────────────────────
-function ReportEditor({ report, onSave, settings }) {
+function ReportEditor({ report, onSave, settings, weeklyReports = [] }) {
   const [items, setItems] = useState(report.items || []);
   const [nextItems, setNextItems] = useState(report.nextItems || []);
   const [markdown, setMarkdown] = useState(report.markdown || '');
@@ -796,23 +797,63 @@ function ReportEditor({ report, onSave, settings }) {
     setAiError('');
     setAiLoading(true);
     try {
-      // 从 workRecords 重新获取该周的工作记录（通过 prompt 传入当前items）
-      const prompt = `请根据以下本周工作情况，重新生成一份专业的中文工作周报（Markdown格式）：
+      // 历史周报（排除当前，按时间倒序）
+      const pastReports = weeklyReports
+        .filter(r => r.id !== report.id && r.markdown)
+        .sort((a, b) => b.weekStart.localeCompare(a.weekStart));
 
-本周范围：${report.range}
+      // 风格示例：最近2份
+      const styleExamples = pastReports.slice(0, 2);
 
-当前工作记录：
-${items.map(it => `- 项目「${it.project}」：${it.content}，进度：${it.progress}`).join('\n')}
+      // 修正对比：有 aiGenerated 且与 markdown 不同的报告（最近3份）
+      const corrections = pastReports
+        .filter(r => r.aiGenerated && r.aiGenerated !== r.markdown)
+        .slice(0, 3);
 
-要求：
-1. 包含"本周工作内容"和"下周工作计划"两个表格
-2. 本周工作内容表格列：项目 | 工作内容 | 项目进度 | 备注
-3. 下周工作计划表格列：项目 | 工作内容
-4. 开头加上：您好：\\n\\n本周(${report.range})的工作总结具体如下，请查收。
-5. 只输出Markdown内容`;
+      // 上周项目背景：最近1份周报的条目
+      const lastReport = pastReports[0];
+
+      // 构建 prompt
+      let prompt = `你是工作周报助手。请根据本周工作记录生成一份专业的中文工作周报。\n\n`;
+
+      if (styleExamples.length > 0) {
+        prompt += `【公司周报风格参考 - 请严格模仿以下示例的措辞和表述习惯】\n`;
+        styleExamples.forEach((r, i) => {
+          prompt += `\n=== 示例${i + 1}（${r.range}周）===\n${r.markdown}\n`;
+        });
+        prompt += `\n`;
+      }
+
+      if (corrections.length > 0) {
+        prompt += `【历史修正记录 - 以下是AI生成后用户修改的内容，请学习用户偏好避免重犯】\n`;
+        corrections.forEach((r, i) => {
+          prompt += `\n修正${i + 1}（${r.range}周）：\nAI生成：\n${r.aiGenerated}\n用户修改为：\n${r.markdown}\n`;
+        });
+        prompt += `\n`;
+      }
+
+      if (lastReport) {
+        prompt += `【上周项目状态参考 - 帮助你理解各项目当前所处阶段】\n`;
+        (lastReport.items || []).forEach(it => {
+          prompt += `- 项目「${it.project}」上周状态：${it.progress}，内容：${it.content}\n`;
+        });
+        prompt += `\n`;
+      }
+
+      prompt += `【本周工作记录】\n`;
+      prompt += items.map(it => `- 项目「${it.project}」：${it.content}，进度：${it.progress}`).join('\n');
+      prompt += `\n\n要求：
+1. 开头加上：您好：\n\n本周(${report.range})的工作总结具体如下，请查收。
+2. 生成"本周工作内容"表格，列：项目 | 工作内容 | 项目进度 | 备注
+3. 生成"下周工作计划"表格，列：项目 | 工作内容（根据本周进展合理推测，用户会自行修改）
+4. 只输出Markdown内容，不要其他说明`;
 
       const settingsCopy = { ...settings, llm: { ...settings.llm, default: selectedProvider } };
       const result = await callAI(settingsCopy, prompt);
+
+      // 保存 AI 原始输出，用于后续修正对比
+      onSave({ ...report, aiGenerated: result, updatedAt: new Date().toISOString() });
+
       setMarkdown(result);
       const parsed = parseMarkdownToReport(result);
       if (parsed.items.length) setItems(parsed.items);
@@ -1128,9 +1169,164 @@ function WeekPickerModal({ onConfirm, onClose, workRecords, weeklyReports }) {
 // ─────────────────────────────────────────
 // 周报管理页面
 // ─────────────────────────────────────────
-function WeeklyReportPage({ workRecords, weeklyReports, setWeeklyReports, settings }) {
+// ─────────────────────────────────────────
+// 历史数据导入弹窗
+// ─────────────────────────────────────────
+function ImportModal({ onClose, onImport, weeklyReports }) {
+  const [preview, setPreview] = useState(null);
+  const [conflict, setConflict] = useState('skip');
+  const [error, setError] = useState('');
+
+  // 解析 Excel 日期单元格（支持 JS Date / 中文字符串 / Excel 序列数）
+  function parseDateCell(val) {
+    if (!val && val !== 0) return null;
+    if (val instanceof Date) return fmt(val);
+    if (typeof val === 'number') {
+      const d = new Date(Math.round((val - 25569) * 86400 * 1000));
+      return fmt(d);
+    }
+    if (typeof val === 'string') {
+      const m = val.match(/(\d+)月(\d+)/);
+      if (m) {
+        const year = new Date().getFullYear();
+        return `${year}-${String(m[1]).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`;
+      }
+      const d = new Date(val);
+      if (!isNaN(d)) return fmt(d);
+    }
+    return null;
+  }
+
+  // 在对象的 key 里找匹配关键词的列名
+  function detectCol(keys, ...keywords) {
+    return keys.find(k => keywords.some(kw => k.includes(kw))) || null;
+  }
+
+  const handleFile = async (e) => {
+    setError('');
+    setPreview(null);
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const buf = await file.arrayBuffer();
+      const wb = XLSX.read(buf, { cellDates: true });
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: '' });
+      if (!rows.length) { setError('表格为空或格式不支持'); return; }
+
+      const keys = Object.keys(rows[0]);
+      const colDate    = detectCol(keys, '日期');
+      const colProject = detectCol(keys, '项目');
+      const colContent = detectCol(keys, '内容');
+      const colHours   = detectCol(keys, '时', '工时', '小时');
+      const colWeekNum = detectCol(keys, '周数', '周次');
+
+      if (!colDate || !colProject || !colContent) {
+        setError('未找到必要列（日期、项目、内容），请检查表格表头');
+        return;
+      }
+
+      // 按 weekEnd 日期分组
+      const weekMap = {};
+      let skipped = 0;
+      rows.forEach(row => {
+        const dateStr = parseDateCell(row[colDate]);
+        if (!dateStr) { skipped++; return; }
+        const project = String(row[colProject] || '').trim();
+        const content = String(row[colContent] || '').trim();
+        if (!project && !content) { skipped++; return; }
+
+        const weekEnd   = getSunday(dateStr);
+        const weekStart = getMonday(dateStr);
+        const weekNum   = colWeekNum ? row[colWeekNum] : '';
+        const hours     = colHours ? (parseFloat(row[colHours]) || 0) : 0;
+
+        if (!weekMap[weekEnd]) weekMap[weekEnd] = { weekEnd, weekStart, weekNum, records: [] };
+        weekMap[weekEnd].records.push({ project, content, hours, date: dateStr });
+      });
+
+      const weeks = Object.values(weekMap).sort((a, b) => b.weekEnd.localeCompare(a.weekEnd));
+      if (!weeks.length) { setError('没有解析到有效数据'); return; }
+      setPreview({ weeks, totalRows: rows.length - skipped, skipped });
+    } catch (e) {
+      setError('解析失败：' + e.message);
+    }
+  };
+
+  const handleConfirm = () => {
+    if (!preview) return;
+    onImport(preview.weeks, conflict);
+  };
+
+  const existingWeekEnds = new Set(weeklyReports.map(r => r.weekEnd));
+  const conflictCount = preview ? preview.weeks.filter(w => existingWeekEnds.has(w.weekEnd)).length : 0;
+
+  return (
+    <Modal title="导入历史数据" onClose={onClose} width="max-w-lg">
+      <div className="space-y-4">
+        <div>
+          <label className="block text-sm text-gray-600 mb-1.5">选择 Excel 文件（.xlsx / .xls / .csv）</label>
+          <input
+            type="file" accept=".xlsx,.xls,.csv"
+            onChange={handleFile}
+            className="block w-full text-sm text-gray-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-blue-50 file:text-blue-600 hover:file:bg-blue-100 cursor-pointer"
+          />
+          <p className="text-xs text-gray-400 mt-1">表头需包含：日期、项目、内容（工时列可选）</p>
+        </div>
+
+        {error && <p className="text-sm text-red-500 bg-red-50 rounded-lg px-3 py-2">{error}</p>}
+
+        {preview && (
+          <>
+            <div className="bg-gray-50 rounded-lg p-3 text-sm">
+              <p className="text-gray-700 font-medium mb-2">
+                解析结果：{preview.totalRows} 条记录，{preview.weeks.length} 个周次
+                {preview.skipped > 0 && <span className="text-gray-400 ml-1">（跳过 {preview.skipped} 条无效行）</span>}
+              </p>
+              <div className="max-h-48 overflow-y-auto scrollbar-thin space-y-1">
+                {preview.weeks.map(w => {
+                  const isConflict = existingWeekEnds.has(w.weekEnd);
+                  return (
+                    <div key={w.weekEnd} className={`flex items-center justify-between px-2 py-1 rounded text-xs ${isConflict ? 'bg-amber-50 text-amber-700' : 'bg-white text-gray-600'}`}>
+                      <span>{w.weekNum ? `第${w.weekNum}周 ` : ''}{w.weekStart} ～ {w.weekEnd}</span>
+                      <span className="text-gray-400">{w.records.length} 条{isConflict ? ' ⚠️已存在' : ''}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {conflictCount > 0 && (
+              <div className="space-y-1.5">
+                <p className="text-sm text-amber-600 font-medium">有 {conflictCount} 个周次已存在，如何处理？</p>
+                <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                  <input type="radio" name="conflict" value="skip" checked={conflict === 'skip'} onChange={() => setConflict('skip')} />
+                  跳过（保留已有数据）
+                </label>
+                <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
+                  <input type="radio" name="conflict" value="overwrite" checked={conflict === 'overwrite'} onChange={() => setConflict('overwrite')} />
+                  覆盖（替换为导入数据）
+                </label>
+              </div>
+            )}
+
+            <div className="flex justify-end gap-2 pt-1">
+              <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50">取消</button>
+              <button onClick={handleConfirm} className="px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
+                确认导入
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeeklyReports, settings }) {
   const [selectedId, setSelectedId] = useState(weeklyReports[0]?.id || null);
   const [showPicker, setShowPicker] = useState(false);
+  const [showImport, setShowImport] = useState(false);
   const [mobileTab, setMobileTab] = useState('list'); // 'list' | 'editor'
   const isMobile = useIsMobile();
 
@@ -1167,15 +1363,57 @@ function WeeklyReportPage({ workRecords, weeklyReports, setWeeklyReports, settin
     setSelectedId(newReports[0]?.id || null);
   };
 
+  const handleImport = (weeks, conflict) => {
+    const existingWeekEnds = new Set(weeklyReports.map(r => r.weekEnd));
+    const newWorkRecords = [...workRecords];
+    let newReports = [...weeklyReports];
+
+    weeks.forEach(w => {
+      const isConflict = existingWeekEnds.has(w.weekEnd);
+      if (isConflict && conflict === 'skip') return;
+
+      // 工作记录：冲突周先删旧的再追加
+      if (isConflict && conflict === 'overwrite') {
+        const toRemove = new Set(workRecords.filter(r => r.date >= w.weekStart && r.date <= w.weekEnd).map(r => r.id));
+        newWorkRecords.splice(0, newWorkRecords.length, ...newWorkRecords.filter(r => !toRemove.has(r.id)));
+      }
+      w.records.forEach(rec => {
+        newWorkRecords.push({ id: uid(), date: rec.date, project: rec.project, content: rec.content, hours: rec.hours, createdAt: new Date().toISOString() });
+      });
+
+      // 周报：用模板生成
+      const generated = generateReportFromRecords(w.weekStart, w.records, w.weekEnd);
+      const newReport = { id: uid(), ...generated, weekEnd: w.weekEnd, generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+      if (isConflict && conflict === 'overwrite') {
+        newReports = newReports.map(r => r.weekEnd === w.weekEnd ? { ...newReport, id: r.id } : r);
+      } else {
+        newReports.push(newReport);
+      }
+    });
+
+    newReports.sort((a, b) => b.weekStart.localeCompare(a.weekStart));
+    setWorkRecords(newWorkRecords);
+    setWeeklyReports(newReports);
+    setShowImport(false);
+    setSelectedId(newReports[0]?.id || null);
+  };
+
   const reportList = (
     <div className={`bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col ${isMobile ? 'h-full' : ''}`} style={isMobile ? {} : {width:'220px',flexShrink:0}}>
-      <div className="p-4 border-b border-gray-100">
+      <div className="p-4 border-b border-gray-100 space-y-2">
         <button
           onClick={() => setShowPicker(true)}
           className="w-full bg-blue-600 text-white text-sm py-2.5 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
           生成周报
+        </button>
+        <button
+          onClick={() => setShowImport(true)}
+          className="w-full border border-gray-200 text-gray-600 text-sm py-2 rounded-lg hover:bg-gray-50 font-medium flex items-center justify-center gap-2"
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+          导入历史数据
         </button>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
@@ -1184,7 +1422,7 @@ function WeeklyReportPage({ workRecords, weeklyReports, setWeeklyReports, settin
             <svg className="w-10 h-10 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
             <p>点击上方按钮<br/>生成第一份周报</p>
           </div>
-        ) : weeklyReports.map(r => (
+        ) : [...weeklyReports].sort((a, b) => b.weekStart.localeCompare(a.weekStart)).map(r => (
           <div
             key={r.id}
             className={`group flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer mb-1 ${selectedId === r.id ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50'}`}
@@ -1192,7 +1430,7 @@ function WeeklyReportPage({ workRecords, weeklyReports, setWeeklyReports, settin
           >
             <div className="min-w-0">
               <div className={`text-sm font-medium truncate ${selectedId === r.id ? 'text-blue-700' : 'text-gray-700'}`}>{r.range}</div>
-              <div className="text-xs text-gray-400">{r.weekStart}</div>
+              <div className="text-xs text-gray-400">{r.weekStart.slice(0,4)}年</div>
             </div>
             <button
               onClick={e => { e.stopPropagation(); handleDeleteReport(r.id); }}
@@ -1213,7 +1451,7 @@ function WeeklyReportPage({ workRecords, weeklyReports, setWeeklyReports, settin
         </button>
       )}
       {selectedReport ? (
-        <ReportEditor report={selectedReport} onSave={handleSaveReport} settings={settings} />
+        <ReportEditor report={selectedReport} onSave={handleSaveReport} settings={settings} weeklyReports={weeklyReports} />
       ) : (
         <div className="flex flex-col items-center justify-center h-full text-gray-300">
           <svg className="w-16 h-16 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -1241,6 +1479,13 @@ function WeeklyReportPage({ workRecords, weeklyReports, setWeeklyReports, settin
           onConfirm={handleConfirmGenerate}
           onClose={() => setShowPicker(false)}
           workRecords={workRecords}
+          weeklyReports={weeklyReports}
+        />
+      )}
+      {showImport && (
+        <ImportModal
+          onClose={() => setShowImport(false)}
+          onImport={handleImport}
           weeklyReports={weeklyReports}
         />
       )}
@@ -2218,7 +2463,7 @@ function App() {
               <WorkbenchPage workRecords={workRecords} setWorkRecords={setWorkRecords} settings={mergedSettings} />
             )}
             {activePage === 'report' && (
-              <WeeklyReportPage workRecords={workRecords} weeklyReports={weeklyReports} setWeeklyReports={setWeeklyReports} settings={mergedSettings} />
+              <WeeklyReportPage workRecords={workRecords} setWorkRecords={setWorkRecords} weeklyReports={weeklyReports} setWeeklyReports={setWeeklyReports} settings={mergedSettings} />
             )}
             {activePage === 'detail' && (
               <WorkDetailPage workRecords={workRecords} setWorkRecords={setWorkRecords} />
