@@ -1840,7 +1840,7 @@ function SbUserSection({ currentUser, syncStatus, syncMsg, syncTime, onManualSyn
 // ─────────────────────────────────────────
 // 设置页面
 // ─────────────────────────────────────────
-function SettingsPage({ settings, setSettings, currentUser, syncStatus, syncMsg, syncTime, onManualSync, onLogout }) {
+function SettingsPage({ settings, setSettings, currentUser, syncStatus, syncMsg, syncTime, onManualSync, onLogout, setWorkRecords, setWeeklyReports }) {
   const providers = settings.llm.providers || DEFAULT_PROVIDERS;
   const [activeId, setActiveId] = useState(providers[0]?.id || '');
   const [testResult, setTestResult] = useState({});   // { [id]: '✓ ...' | '✗ ...' }
@@ -2079,6 +2079,26 @@ function SettingsPage({ settings, setSettings, currentUser, syncStatus, syncMsg,
         <button onClick={handleSave} className={`px-6 py-2 text-sm rounded-lg font-medium ${saved ? 'bg-green-500 text-white' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
           {saved ? '已保存 ✓' : '保存设置'}
         </button>
+
+        {/* ── 数据管理 ── */}
+        <div className="border-t border-gray-100 pt-5">
+          <h3 className="font-medium text-gray-700 mb-1">数据管理</h3>
+          <p className="text-xs text-gray-400 mb-3">清空后数据将同步删除，无法恢复，请谨慎操作</p>
+          <div className="flex flex-wrap gap-3">
+            <button
+              onClick={() => { if (window.confirm('确定清空全部工作记录？此操作不可恢复。')) { setWorkRecords([]); } }}
+              className="px-4 py-2 text-sm border border-red-200 text-red-500 rounded-lg hover:bg-red-50"
+            >清空工作记录</button>
+            <button
+              onClick={() => { if (window.confirm('确定清空全部周报？此操作不可恢复。')) { setWeeklyReports([]); } }}
+              className="px-4 py-2 text-sm border border-red-200 text-red-500 rounded-lg hover:bg-red-50"
+            >清空周报</button>
+            <button
+              onClick={() => { if (window.confirm('确定清空全部数据（工作记录 + 周报）？此操作不可恢复。')) { setWorkRecords([]); setWeeklyReports([]); } }}
+              className="px-4 py-2 text-sm bg-red-50 border border-red-300 text-red-600 rounded-lg hover:bg-red-100 font-medium"
+            >清空全部数据</button>
+          </div>
+        </div>
       </div>
 
       {/* 添加 LLM 弹窗 */}
@@ -2576,6 +2596,8 @@ function App() {
                 syncStatus={syncStatus} syncMsg={syncMsg} syncTime={syncTime}
                 onManualSync={() => saveData(workRecords, weeklyReports)}
                 onLogout={handleLogout}
+                setWorkRecords={setWorkRecords}
+                setWeeklyReports={setWeeklyReports}
               />
             )}
           </div>
