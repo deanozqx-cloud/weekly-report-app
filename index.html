@@ -1634,7 +1634,7 @@ function ProjectSummaryPage({ workRecords }) {
       byProject[r.project].dates.add(r.date);
     });
     return Object.entries(byProject)
-      .map(([project, d]) => ({ project, hours: d.hours, days: d.dates.size, avgHours: (d.hours / d.dates.size).toFixed(1) }))
+      .map(([project, d]) => ({ project, hours: d.hours, personDays: (d.hours / 7.5).toFixed(1), days: d.dates.size, avgHours: (d.hours / d.dates.size).toFixed(1) }))
       .sort((a, b) => b.hours - a.hours);
   }, [workRecords, startDate, endDate]);
 
@@ -1671,8 +1671,7 @@ function ProjectSummaryPage({ workRecords }) {
                   </div>
                   <div className="flex gap-4 text-sm">
                     <span className="text-gray-500">工时 <strong className="text-blue-600">{s.hours.toFixed(1)}h</strong></span>
-                    <span className="text-gray-500">天数 <strong className="text-gray-700">{s.days}天</strong></span>
-                    <span className="text-gray-500">日均 <strong className="text-gray-700">{s.avgHours}h</strong></span>
+                    <span className="text-gray-500">人天 <strong className="text-gray-700">{s.personDays}天</strong></span>
                   </div>
                 </div>
                 {/* 进度条 */}
