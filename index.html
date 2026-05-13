@@ -8,6 +8,7 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.development.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.development.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.2/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/leancloud-storage@4/dist/av-min.js"></script>
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
@@ -192,48 +193,50 @@ async function callAI(settings, prompt) {
 }
 
 // ─────────────────────────────────────────
-// GitHub Gist 同步工具函数
+// LeanCloud 配置（在 leancloud.cn 控制台创建应用后填入）
 // ─────────────────────────────────────────
-const GIST_FILE = 'weekly-report-data.json';
-const GIST_HEADERS = (token) => ({
-  'Authorization': `Bearer ${token}`,
-  'Accept': 'application/vnd.github+json',
-  'Content-Type': 'application/json',
-  'X-GitHub-Api-Version': '2022-11-28',
-});
+const LC_APP_ID     = 'YOUR_APP_ID';      // 控制台 → 应用 → 设置 → 应用凭证
+const LC_APP_KEY    = 'YOUR_APP_KEY';
+const LC_SERVER_URL = 'YOUR_SERVER_URL';  // 如 https://xxxxxxxx.lc-cn-n1-shared.com
 
-async function gistCreate(token) {
-  const res = await fetch('https://api.github.com/gists', {
-    method: 'POST',
-    headers: GIST_HEADERS(token),
-    body: JSON.stringify({
-      description: '周报助手 - 工作记录数据',
-      public: false,
-      files: { [GIST_FILE]: { content: JSON.stringify({ workRecords: [], weeklyReports: [], lastUpdated: new Date().toISOString() }, null, 2) } },
-    }),
-  });
-  if (!res.ok) { const e = await res.json(); throw new Error(e.message || `${res.status}`); }
-  return (await res.json()).id;
+AV.init({ appId: LC_APP_ID, appKey: LC_APP_KEY, serverURL: LC_SERVER_URL });
+
+// 获取（或初始化）当前用户的数据对象
+async function lcGetDataObj() {
+  const user = AV.User.current();
+  const query = new AV.Query('UserData');
+  query.equalTo('user', user);
+  let obj = await query.first();
+  if (!obj) {
+    obj = new AV.Object('UserData');
+    obj.set('user', user);
+    const acl = new AV.ACL(user);
+    acl.setPublicReadAccess(false);
+    obj.setACL(acl);
+  }
+  return obj;
 }
 
-async function gistLoad(token, gistId) {
-  const res = await fetch(`https://api.github.com/gists/${gistId}`, { headers: GIST_HEADERS(token) });
-  if (!res.ok) { const e = await res.json(); throw new Error(e.message || `${res.status}`); }
-  const data = await res.json();
-  const raw = data.files[GIST_FILE]?.content;
-  if (!raw) throw new Error('Gist 中未找到数据文件');
-  return JSON.parse(raw);
+async function lcLoad() {
+  const user = AV.User.current();
+  if (!user) return null;
+  const query = new AV.Query('UserData');
+  query.equalTo('user', user);
+  const obj = await query.first();
+  if (!obj) return { workRecords: [], weeklyReports: [] };
+  return {
+    workRecords:   obj.get('workRecords')   || [],
+    weeklyReports: obj.get('weeklyReports') || [],
+  };
 }
 
-async function gistSave(token, gistId, workRecords, weeklyReports) {
-  const res = await fetch(`https://api.github.com/gists/${gistId}`, {
-    method: 'PATCH',
-    headers: GIST_HEADERS(token),
-    body: JSON.stringify({
-      files: { [GIST_FILE]: { content: JSON.stringify({ workRecords, weeklyReports, lastUpdated: new Date().toISOString() }, null, 2) } },
-    }),
-  });
-  if (!res.ok) { const e = await res.json(); throw new Error(e.message || `${res.status}`); }
+async function lcSave(workRecords, weeklyReports) {
+  if (!AV.User.current()) throw new Error('未登录');
+  const obj = await lcGetDataObj();
+  obj.set('workRecords',   workRecords);
+  obj.set('weeklyReports', weeklyReports);
+  obj.set('lastUpdated',   new Date().toISOString());
+  await obj.save();
 }
 
 function buildReportPrompt(weekStart, records, defaultHours) {
@@ -1333,158 +1336,52 @@ function ProjectSummaryPage({ workRecords }) {
 }
 
 // ─────────────────────────────────────────
-// GitHub Gist 同步配置组件
+// 用户信息面板（设置页内）
 // ─────────────────────────────────────────
-function GistSyncSection({ gistConfig, setGistConfig, onLoad, onSave, workRecords, weeklyReports, syncStatus, syncMsg, syncTime }) {
-  const [token, setToken] = useState(gistConfig.token || '');
-  const [gistId, setGistId] = useState(gistConfig.gistId || '');
-  const [opStatus, setOpStatus] = useState(''); // 操作反馈
-  const [opLoading, setOpLoading] = useState(''); // 'init'|'load'|'save'|''
-  const [showToken, setShowToken] = useState(false);
-
-  const isConfigured = !!gistConfig.token && !!gistConfig.gistId;
-  const hasLocalChange = token !== gistConfig.token || gistId !== gistConfig.gistId;
-
-  const saveConfig = () => {
-    setGistConfig({ token: token.trim(), gistId: gistId.trim() });
-    setOpStatus('✓ 配置已保存');
-    setTimeout(() => setOpStatus(''), 2000);
-  };
-
-  // 初始化：在 GitHub 创建一个新 Gist 并保存当前数据
-  const handleInit = async () => {
-    if (!token.trim()) { setOpStatus('✗ 请先填写 Token'); return; }
-    setOpLoading('init');
-    setOpStatus('');
-    try {
-      const newId = await gistCreate(token.trim());
-      await gistSave(token.trim(), newId, workRecords, weeklyReports);
-      setGistId(newId);
-      setGistConfig({ token: token.trim(), gistId: newId });
-      setOpStatus('✓ 初始化成功，数据已上传');
-    } catch (e) {
-      setOpStatus(`✗ 初始化失败：${e.message}`);
-    } finally {
-      setOpLoading('');
-    }
-  };
-
-  // 从云端加载（覆盖本地）
-  const handleLoad = async () => {
-    if (!token.trim() || !gistId.trim()) { setOpStatus('✗ 请先填写 Token 和 Gist ID'); return; }
-    if (!window.confirm('从云端加载会覆盖本地数据，确定继续？')) return;
-    setOpLoading('load');
-    setOpStatus('');
-    try {
-      await onLoad(token.trim(), gistId.trim(), false);
-      setOpStatus('✓ 已从云端加载数据');
-    } catch (e) {
-      setOpStatus(`✗ 加载失败：${e.message}`);
-    } finally {
-      setOpLoading('');
-    }
-  };
-
-  // 立即上传到云端
-  const handleSave = async () => {
-    if (!token.trim() || !gistId.trim()) { setOpStatus('✗ 请先填写 Token 和 Gist ID'); return; }
-    setOpLoading('save');
-    setOpStatus('');
-    try {
-      await onSave(token.trim(), gistId.trim(), workRecords, weeklyReports);
-      setOpStatus('✓ 已上传到云端');
-    } catch (e) {
-      setOpStatus(`✗ 上传失败：${e.message}`);
-    } finally {
-      setOpLoading('');
-    }
-  };
-
-  const statusColor = { synced: 'text-green-500', error: 'text-red-400', syncing: 'text-blue-400', loading: 'text-blue-400' };
+function LcUserSection({ currentUser, syncStatus, syncMsg, syncTime, onManualSync, onLogout }) {
+  const displayName = currentUser?.get('displayName') || currentUser?.getUsername() || '用户';
+  const email = currentUser?.getEmail() || currentUser?.getUsername() || '';
+  const statusColor = { synced: 'text-green-500', error: 'text-red-400', syncing: 'text-blue-400', loading: 'text-blue-400', idle: 'text-gray-400' };
+  const statusLabel = { synced: '✓ 已同步', error: `✗ ${syncMsg}`, syncing: '↻ 同步中…', loading: '↻ 加载中…', idle: '待同步' };
 
   return (
     <div className="border border-gray-200 rounded-xl p-5 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="font-medium text-gray-700">数据云同步</h3>
-          <p className="text-xs text-gray-400 mt-0.5">通过 GitHub Gist 跨设备保存工作记录</p>
+          <h3 className="font-medium text-gray-700">账号与数据同步</h3>
+          <p className="text-xs text-gray-400 mt-0.5">数据存储于 LeanCloud，多设备自动同步</p>
         </div>
-        {isConfigured && (
-          <div className={`text-xs font-medium ${statusColor[syncStatus] || 'text-gray-400'}`}>
-            {syncStatus === 'synced' && syncTime ? `✓ 已同步 ${syncTime.toLocaleTimeString()}` : ''}
-            {syncStatus === 'syncing' ? '↻ 同步中…' : ''}
-            {syncStatus === 'loading' ? '↻ 加载中…' : ''}
-            {syncStatus === 'error' ? `✗ ${syncMsg}` : ''}
-            {syncStatus === 'idle' && isConfigured ? '待同步' : ''}
-          </div>
-        )}
+        <div className={`text-xs font-medium ${statusColor[syncStatus]}`}>{statusLabel[syncStatus]}</div>
       </div>
 
-      {/* Step 1：获取 Token 说明 */}
-      <div className="bg-blue-50 border border-blue-100 rounded-lg p-3 text-xs text-blue-700 space-y-1">
-        <p className="font-medium">第一步：获取 GitHub Token</p>
-        <p>前往 <a href="https://github.com/settings/tokens/new?scopes=gist&description=周报助手" target="_blank" rel="noopener" className="underline font-medium">github.com → Settings → Tokens → New token</a></p>
-        <p>权限只需勾选 <strong>gist</strong>，生成后复制 token 填入下方。</p>
-      </div>
-
-      {/* Token 输入 */}
-      <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">GitHub Personal Access Token</label>
-        <div className="flex gap-2">
-          <input
-            type={showToken ? 'text' : 'password'}
-            className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 font-mono"
-            placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-            value={token}
-            onChange={e => setToken(e.target.value)}
-          />
-          <button onClick={() => setShowToken(v => !v)} className="px-3 py-2 border border-gray-200 rounded-lg text-xs text-gray-500 hover:bg-gray-50">
-            {showToken ? '隐藏' : '显示'}
-          </button>
+      <div className="flex items-center gap-3 bg-gray-50 rounded-lg px-4 py-3">
+        <div className="w-9 h-9 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold text-sm shrink-0">
+          {displayName[0]?.toUpperCase()}
+        </div>
+        <div className="min-w-0">
+          <div className="font-medium text-gray-800 text-sm">{displayName}</div>
+          <div className="text-xs text-gray-400 truncate">{email}</div>
         </div>
       </div>
 
-      {/* Gist ID */}
-      <div>
-        <label className="block text-xs font-medium text-gray-500 mb-1">
-          Gist ID
-          <span className="text-gray-400 font-normal ml-1">（首次使用点「初始化」自动生成）</span>
-        </label>
-        <input
-          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
-          placeholder="留空后点「初始化」自动创建"
-          value={gistId}
-          onChange={e => setGistId(e.target.value)}
-        />
+      <div className="flex items-center gap-2 flex-wrap">
+        <button
+          onClick={onManualSync}
+          disabled={syncStatus === 'syncing' || syncStatus === 'loading'}
+          className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {syncStatus === 'syncing' ? '同步中…' : '立即同步'}
+        </button>
+        {syncTime && (
+          <span className="text-xs text-gray-400">上次同步：{syncTime.toLocaleTimeString()}</span>
+        )}
+        <button
+          onClick={onLogout}
+          className="ml-auto px-3 py-1.5 text-sm text-red-400 hover:text-red-600 hover:bg-red-50 border border-transparent hover:border-red-200 rounded-lg"
+        >
+          退出登录
+        </button>
       </div>
-
-      {/* 操作按钮 */}
-      <div className="flex flex-wrap gap-2 pt-1">
-        {hasLocalChange && (
-          <button onClick={saveConfig} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">
-            保存配置
-          </button>
-        )}
-        {!gistId && token && (
-          <button onClick={handleInit} disabled={!!opLoading} className="px-3 py-1.5 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium disabled:opacity-50">
-            {opLoading === 'init' ? '初始化中…' : '🚀 初始化（首次使用）'}
-          </button>
-        )}
-        {isConfigured && (
-          <>
-            <button onClick={handleSave} disabled={!!opLoading} className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50">
-              {opLoading === 'save' ? '上传中…' : '↑ 立即上传'}
-            </button>
-            <button onClick={handleLoad} disabled={!!opLoading} className="px-3 py-1.5 text-sm border border-gray-200 rounded-lg text-gray-600 hover:bg-gray-50 disabled:opacity-50">
-              {opLoading === 'load' ? '加载中…' : '↓ 从云端恢复'}
-            </button>
-          </>
-        )}
-      </div>
-
-      {opStatus && (
-        <p className={`text-xs ${opStatus.startsWith('✓') ? 'text-green-600' : 'text-red-500'}`}>{opStatus}</p>
-      )}
     </div>
   );
 }
@@ -1492,7 +1389,7 @@ function GistSyncSection({ gistConfig, setGistConfig, onLoad, onSave, workRecord
 // ─────────────────────────────────────────
 // 设置页面
 // ─────────────────────────────────────────
-function SettingsPage({ settings, setSettings, gistConfig, setGistConfig, onLoadFromGist, onSaveToGist, workRecords, weeklyReports, syncStatus, syncMsg, syncTime }) {
+function SettingsPage({ settings, setSettings, currentUser, syncStatus, syncMsg, syncTime, onManualSync, onLogout }) {
   const providers = settings.llm.providers || DEFAULT_PROVIDERS;
   const [activeId, setActiveId] = useState(providers[0]?.id || '');
   const [testResult, setTestResult] = useState({});   // { [id]: '✓ ...' | '✗ ...' }
@@ -1682,12 +1579,11 @@ function SettingsPage({ settings, setSettings, gistConfig, setGistConfig, onLoad
           )}
         </div>
 
-        {/* ── GitHub Gist 数据同步 ── */}
-        <GistSyncSection
-          gistConfig={gistConfig} setGistConfig={setGistConfig}
-          onLoad={onLoadFromGist} onSave={onSaveToGist}
-          workRecords={workRecords} weeklyReports={weeklyReports}
+        {/* ── 账号与数据同步 ── */}
+        <LcUserSection
+          currentUser={currentUser}
           syncStatus={syncStatus} syncMsg={syncMsg} syncTime={syncTime}
+          onManualSync={onManualSync} onLogout={onLogout}
         />
 
         {/* ── 默认工时 ── */}
@@ -1839,9 +1735,116 @@ function AddProviderModal({ onAdd, onClose }) {
 }
 
 // ─────────────────────────────────────────
+// 登录 / 注册页
+// ─────────────────────────────────────────
+function AuthPage({ onLogin }) {
+  const [mode, setMode] = useState('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async () => {
+    if (!email.trim() || !password) { setError('请填写邮箱和密码'); return; }
+    setLoading(true);
+    setError('');
+    try {
+      let user;
+      if (mode === 'login') {
+        user = await AV.User.logIn(email.trim(), password);
+      } else {
+        if (!displayName.trim()) { setError('请填写姓名'); setLoading(false); return; }
+        const u = new AV.User();
+        u.setUsername(email.trim());
+        u.setPassword(password);
+        u.setEmail(email.trim());
+        u.set('displayName', displayName.trim());
+        user = await u.signUp();
+      }
+      onLogin(user);
+    } catch (e) {
+      const errorMap = {
+        'Invalid username or password': '邮箱或密码错误',
+        'Username has already been taken': '该邮箱已被注册',
+        'Email address is already associated with another user': '该邮箱已被注册',
+      };
+      setError(errorMap[e.message] || e.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+      <div className="bg-white rounded-2xl shadow-lg w-full max-w-sm mx-4 p-8">
+        <div className="text-center mb-8">
+          <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center text-white font-bold text-xl mx-auto mb-3">周</div>
+          <h1 className="text-xl font-semibold text-gray-800">周报助手</h1>
+          <p className="text-sm text-gray-400 mt-1">{mode === 'login' ? '登录账号继续使用' : '注册新账号'}</p>
+        </div>
+
+        <div className="space-y-4">
+          {mode === 'register' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">姓名</label>
+              <input
+                className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                placeholder="您的姓名"
+                value={displayName}
+                onChange={e => setDisplayName(e.target.value)}
+              />
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">邮箱</label>
+            <input
+              type="email"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              placeholder="name@company.com"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">密码</label>
+            <input
+              type="password"
+              className="w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              placeholder="••••••••"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              onKeyDown={e => e.key === 'Enter' && handleSubmit()}
+            />
+          </div>
+          {error && <p className="text-sm text-red-500 bg-red-50 px-3 py-2 rounded-lg">{error}</p>}
+          <button
+            onClick={handleSubmit}
+            disabled={loading}
+            className="w-full bg-blue-600 text-white py-2.5 rounded-lg font-medium text-sm hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? (mode === 'login' ? '登录中…' : '注册中…') : (mode === 'login' ? '登录' : '注册')}
+          </button>
+        </div>
+
+        <div className="text-center mt-5">
+          <button
+            onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(''); }}
+            className="text-sm text-blue-600 hover:text-blue-700"
+          >
+            {mode === 'login' ? '没有账号？立即注册' : '已有账号？去登录'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────
 // 侧边导航
 // ─────────────────────────────────────────
-function Sidebar({ activePage, setActivePage }) {
+function Sidebar({ activePage, setActivePage, currentUser }) {
   const items = [
     { id: 'workbench', label: '工作台', icon: (
       <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2" strokeWidth="2"/><line x1="16" y1="2" x2="16" y2="6" strokeWidth="2" strokeLinecap="round"/><line x1="8" y1="2" x2="8" y2="6" strokeWidth="2" strokeLinecap="round"/><line x1="3" y1="10" x2="21" y2="10" strokeWidth="2"/></svg>
@@ -1881,8 +1884,16 @@ function Sidebar({ activePage, setActivePage }) {
         ))}
       </nav>
 
-      {/* 底部版本 */}
-      <div className="pb-4 text-center text-slate-600 text-xs">v1.0</div>
+      {/* 底部用户头像（点击跳设置） */}
+      <div className="pb-4 flex flex-col items-center gap-1">
+        <button
+          onClick={() => setActivePage('settings')}
+          className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white font-semibold text-sm hover:bg-blue-500"
+          title={currentUser?.get('displayName') || currentUser?.getUsername()}
+        >
+          {(currentUser?.get('displayName') || currentUser?.getUsername() || '?')[0].toUpperCase()}
+        </button>
+      </div>
     </div>
   );
 }
@@ -1892,10 +1903,12 @@ function Sidebar({ activePage, setActivePage }) {
 // ─────────────────────────────────────────
 function App() {
   const [activePage, setActivePage] = useState('workbench');
+  const [currentUser, setCurrentUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
   const [workRecords, setWorkRecordsRaw] = useStorage('workRecords', []);
   const [weeklyReports, setWeeklyReportsRaw] = useStorage('weeklyReports', []);
   const [settings, setSettingsRaw] = useStorage('settings', defaultSettings);
-  const [gistConfig, setGistConfigRaw] = useStorage('gistConfig', { token: '', gistId: '' });
 
   // 同步状态：idle | loading | syncing | synced | error
   const [syncStatus, setSyncStatus] = useState('idle');
@@ -1921,60 +1934,80 @@ function App() {
   const setWorkRecords = (v) => setWorkRecordsRaw(typeof v === 'function' ? v(workRecords) : v);
   const setWeeklyReports = (v) => setWeeklyReportsRaw(typeof v === 'function' ? v(weeklyReports) : v);
   const setSettings = (v) => setSettingsRaw(typeof v === 'function' ? v(settings) : v);
-  const setGistConfig = (v) => setGistConfigRaw(typeof v === 'function' ? v(gistConfig) : v);
 
-  // ── 从 Gist 加载数据（启动时 + 手动）──
-  const loadFromGist = useCallback(async (token, gistId, quiet = false) => {
-    if (!token || !gistId) return;
-    if (!quiet) setSyncStatus('loading');
+  // ── 从 LC 加载数据 ──
+  const loadFromLC = useCallback(async () => {
+    setSyncStatus('loading');
     try {
-      const data = await gistLoad(token, gistId);
-      if (data.workRecords) setWorkRecordsRaw(data.workRecords);
-      if (data.weeklyReports) setWeeklyReportsRaw(data.weeklyReports);
-      setSyncStatus('synced');
-      setSyncTime(new Date());
-      setSyncMsg('');
-    } catch (e) {
-      setSyncStatus('error');
-      setSyncMsg(e.message);
-    }
-  }, []);
-
-  // ── 保存到 Gist ──
-  const saveToGist = useCallback(async (token, gistId, wr, wpr) => {
-    if (!token || !gistId) return;
-    setSyncStatus('syncing');
-    try {
-      await gistSave(token, gistId, wr, wpr);
+      const data = await lcLoad();
+      if (data) {
+        if (data.workRecords)   setWorkRecordsRaw(data.workRecords);
+        if (data.weeklyReports) setWeeklyReportsRaw(data.weeklyReports);
+      }
       if (isMounted.current) { setSyncStatus('synced'); setSyncTime(new Date()); setSyncMsg(''); }
     } catch (e) {
       if (isMounted.current) { setSyncStatus('error'); setSyncMsg(e.message); }
     }
   }, []);
 
-  // 启动时自动从 Gist 加载
-  useEffect(() => {
-    if (gistConfig.token && gistConfig.gistId) {
-      loadFromGist(gistConfig.token, gistConfig.gistId, false);
+  // ── 保存到 LC ──
+  const saveToLC = useCallback(async (wr, wpr) => {
+    setSyncStatus('syncing');
+    try {
+      await lcSave(wr, wpr);
+      if (isMounted.current) { setSyncStatus('synced'); setSyncTime(new Date()); setSyncMsg(''); }
+    } catch (e) {
+      if (isMounted.current) { setSyncStatus('error'); setSyncMsg(e.message); }
     }
-  }, []); // 只在挂载时执行一次
+  }, []);
+
+  // 检查已有登录态
+  useEffect(() => {
+    const user = AV.User.current();
+    if (user) {
+      setCurrentUser(user);
+      loadFromLC();
+    }
+    setAuthLoading(false);
+  }, []);
 
   // 数据变化时自动保存（防抖 3s）
   useEffect(() => {
-    if (!gistConfig.token || !gistConfig.gistId) return;
-    if (syncStatus === 'loading') return; // 正在加载中，不触发保存
+    if (!currentUser || syncStatus === 'loading') return;
     clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => {
-      saveToGist(gistConfig.token, gistConfig.gistId, workRecords, weeklyReports);
+      saveToLC(workRecords, weeklyReports);
     }, 3000);
     return () => clearTimeout(autoSaveTimer.current);
-  }, [workRecords, weeklyReports, gistConfig.token, gistConfig.gistId]);
+  }, [workRecords, weeklyReports]);
+
+  const handleLogin = (user) => {
+    setCurrentUser(user);
+    loadFromLC();
+  };
+
+  const handleLogout = async () => {
+    if (!window.confirm('确定退出登录？')) return;
+    await AV.User.logOut();
+    setCurrentUser(null);
+    setWorkRecordsRaw([]);
+    setWeeklyReportsRaw([]);
+    setSyncStatus('idle');
+  };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-gray-400 text-sm">加载中…</div>
+      </div>
+    );
+  }
+
+  if (!currentUser) return <AuthPage onLogin={handleLogin} />;
 
   const pageTitle = { workbench: '工作台', report: '周报管理', detail: '工作明细', summary: '项目汇总', settings: '设置' };
 
-  // 同步状态图标
   const SyncIndicator = () => {
-    if (!gistConfig.token || !gistConfig.gistId) return null;
     const label = { loading: '加载中…', syncing: '同步中…', synced: '已同步', error: '同步失败', idle: '' }[syncStatus] || '';
     const color = { loading: 'text-blue-400', syncing: 'text-blue-400', synced: 'text-green-500', error: 'text-red-400', idle: 'text-gray-300' }[syncStatus];
     const icon = { loading: '↻', syncing: '↻', synced: '✓', error: '✗', idle: '○' }[syncStatus];
@@ -1983,7 +2016,7 @@ function App() {
       <div
         className={`flex items-center gap-1.5 text-xs ${color} cursor-pointer`}
         title={syncStatus === 'error' ? syncMsg : syncTime ? `上次同步：${syncTime.toLocaleTimeString()}` : ''}
-        onClick={() => saveToGist(gistConfig.token, gistConfig.gistId, workRecords, weeklyReports)}
+        onClick={() => saveToLC(workRecords, weeklyReports)}
       >
         <span className={spin ? 'animate-spin inline-block' : ''}>{icon}</span>
         <span>{label}</span>
@@ -1993,7 +2026,7 @@ function App() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar activePage={activePage} setActivePage={setActivePage} />
+      <Sidebar activePage={activePage} setActivePage={setActivePage} currentUser={currentUser} />
 
       <div className="flex-1 flex flex-col overflow-hidden bg-gray-50">
         {/* 顶部 */}
@@ -2023,10 +2056,10 @@ function App() {
             {activePage === 'settings' && (
               <SettingsPage
                 settings={mergedSettings} setSettings={setSettings}
-                gistConfig={gistConfig} setGistConfig={setGistConfig}
-                onLoadFromGist={loadFromGist} onSaveToGist={saveToGist}
-                workRecords={workRecords} weeklyReports={weeklyReports}
+                currentUser={currentUser}
                 syncStatus={syncStatus} syncMsg={syncMsg} syncTime={syncTime}
+                onManualSync={() => saveToLC(workRecords, weeklyReports)}
+                onLogout={handleLogout}
               />
             )}
           </div>
