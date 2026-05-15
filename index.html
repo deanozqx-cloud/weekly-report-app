@@ -912,7 +912,7 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleAiGen = async () => {
+  const handleAiGen = async (providerOverride) => {
     setAiError('');
     setAiLoading(true);
     try {
@@ -979,7 +979,7 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
 3. 生成"下周工作计划"表格，列：项目 | 工作内容（根据本周进展合理推测，用户会自行修改）
 4. 只输出Markdown内容，不要其他说明`;
 
-      const settingsCopy = { ...settings, llm: { ...settings.llm, default: selectedProvider } };
+      const settingsCopy = { ...settings, llm: { ...settings.llm, default: providerOverride || selectedProvider } };
       const result = await callAI(settingsCopy, prompt);
 
       // 保存 AI 原始输出，用于后续修正对比
@@ -1030,7 +1030,7 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
   useEffect(() => {
     if (report.autoAI) {
       onSave({ ...report, autoAI: false, updatedAt: new Date().toISOString() });
-      handleAiGen();
+      handleAiGen(report.autoAIProvider || undefined);
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -1195,11 +1195,13 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
 // ─────────────────────────────────────────
 // 周选择弹窗
 // ─────────────────────────────────────────
-function WeekPickerModal({ onConfirm, onClose, workRecords, weeklyReports }) {
+function WeekPickerModal({ onConfirm, onClose, workRecords, weeklyReports, settings }) {
   const thisMonday = getMonday(today());
   const thisSunday = getSunday(today());
   const [startDate, setStartDate] = useState(thisMonday);
   const [endDate, setEndDate]     = useState(thisSunday);
+  const availableProviders = settings?.llm?.providers || DEFAULT_PROVIDERS;
+  const [selectedAIProvider, setSelectedAIProvider] = useState(settings?.llm?.default || availableProviders[0]?.id || '');
 
   // 日期合法性：结束不早于开始
   const isValid = endDate >= startDate;
@@ -1325,16 +1327,30 @@ function WeekPickerModal({ onConfirm, onClose, workRecords, weeklyReports }) {
           </div>
         )}
 
-        {/* 操作按钮 */}
-        <div className="flex justify-end gap-2 pt-1">
-          <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
-          <button
-            disabled={!isValid}
-            onClick={() => onConfirm(startDate, endDate, records.length === 0)}
-            className="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            生成周报
-          </button>
+        {/* AI 模型选择 + 操作按钮 */}
+        <div className="flex items-center justify-between gap-2 pt-1">
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-gray-500 shrink-0">AI 模型</span>
+            <select
+              className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-300 bg-white"
+              value={selectedAIProvider}
+              onChange={e => setSelectedAIProvider(e.target.value)}
+            >
+              {availableProviders.map(p => (
+                <option key={p.id} value={p.id}>{p.label || p.name || p.id}</option>
+              ))}
+            </select>
+          </div>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
+            <button
+              disabled={!isValid}
+              onClick={() => onConfirm(startDate, endDate, records.length === 0, selectedAIProvider)}
+              className="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              生成周报
+            </button>
+          </div>
         </div>
       </div>
     </Modal>
@@ -1507,7 +1523,7 @@ function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeekl
 
   const selectedReport = weeklyReports.find(r => r.id === selectedId);
 
-  const handleConfirmGenerate = (weekStart, weekEnd, isEmpty) => {
+  const handleConfirmGenerate = (weekStart, weekEnd, isEmpty, aiProvider) => {
     if (isEmpty && !window.confirm('该时段没有工作记录，是否仍要生成空白周报？')) return;
     setShowPicker(false);
 
@@ -1515,7 +1531,7 @@ function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeekl
     const existing = weeklyReports.find(r => r.weekStart === weekStart && r.weekEnd === weekEnd);
 
     const generated = generateReportFromRecords(weekStart, records, weekEnd);
-    const newReport = { id: uid(), ...generated, weekEnd, autoAI: true, generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const newReport = { id: uid(), ...generated, weekEnd, autoAI: true, autoAIProvider: aiProvider || '', generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
 
     let newReports;
     if (existing) {
@@ -1655,6 +1671,7 @@ function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeekl
           onClose={() => setShowPicker(false)}
           workRecords={workRecords}
           weeklyReports={weeklyReports}
+          settings={settings}
         />
       )}
       {showImport && (
