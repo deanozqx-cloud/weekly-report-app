@@ -877,7 +877,7 @@ function SearchableProjectSelect({ projects, value, onChange, placeholder = '筛
 // ─────────────────────────────────────────
 // 周报编辑器
 // ─────────────────────────────────────────
-function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [], workRecords = [] }) {
+function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [], workRecords = [], setWorkRecords }) {
   const [items, setItems] = useState(report.items || []);
   const [nextItems, setNextItems] = useState(report.nextItems || []);
   const [markdown, setMarkdown] = useState(report.markdown || '');
@@ -959,9 +959,21 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
         prompt += `\n`;
       }
 
-      prompt += `【本周工作记录】\n`;
-      prompt += items.map(it => `- 项目「${it.project}」：${it.content}，进度：${it.progress}`).join('\n');
-      prompt += `\n\n要求：
+      const dailyLines = weekRecords
+        .slice().sort((a, b) => a.date.localeCompare(b.date) || a.project.localeCompare(b.project))
+        .map(r => `- ${r.date} 项目「${r.project}」：${r.content}（${r.hours}h）`)
+        .join('\n');
+      prompt += `【本周每日工作明细（主要输入，请以此为准整理周报）】\n`;
+      prompt += dailyLines || '（本周无工作记录）';
+      prompt += `\n\n`;
+
+      if (items.length > 0) {
+        prompt += `【当前周报草稿（供参考）】\n`;
+        prompt += items.map(it => `- 项目「${it.project}」：${it.content}，进度：${it.progress}`).join('\n');
+        prompt += `\n\n`;
+      }
+
+      prompt += `要求：
 1. 开头加上：您好：\n\n本周(${report.range})的工作总结具体如下，请查收。
 2. 生成"本周工作内容"表格，列：项目 | 工作内容 | 项目进度 | 备注
 3. 生成"下周工作计划"表格，列：项目 | 工作内容（根据本周进展合理推测，用户会自行修改）
@@ -1000,6 +1012,27 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
     return map;
   }, [weekRecords]);
   const totalWeekHours = useMemo(() => weekRecords.reduce((s, r) => s + r.hours, 0), [weekRecords]);
+
+  const handleHoursChange = (project, newTotal) => {
+    if (!setWorkRecords) return;
+    const projRecs = weekRecords.filter(r => r.project === project);
+    const otherDaysHours = projRecs.filter(r => r.date !== report.weekEnd).reduce((s, r) => s + r.hours, 0);
+    const lastDayHours = Math.max(0, Math.round((newTotal - otherDaysHours) * 10) / 10);
+    const existing = projRecs.find(r => r.date === report.weekEnd);
+    if (existing) {
+      setWorkRecords(workRecords.map(r => r.id === existing.id ? { ...r, hours: lastDayHours } : r));
+    } else {
+      setWorkRecords([...workRecords, { id: uid(), date: report.weekEnd, project, content: project, hours: lastDayHours, createdAt: new Date().toISOString() }]);
+    }
+  };
+
+  // 新建周报时自动触发 AI 生成
+  useEffect(() => {
+    if (report.autoAI) {
+      onSave({ ...report, autoAI: false, updatedAt: new Date().toISOString() });
+      handleAiGen();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // providerLabels 从 settings 动态取
 
@@ -1109,7 +1142,13 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
                   <div key={it.id} className={`grid items-center px-3 py-2 gap-2 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`} style={{gridTemplateColumns:'1fr 2fr 60px 1fr 1fr auto'}}>
                     <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.project} onChange={e => updateItem(it.id, 'project', e.target.value)} placeholder="项目名" />
                     <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.content} onChange={e => updateItem(it.id, 'content', e.target.value)} placeholder="工作内容" />
-                    <span className="text-xs text-blue-600 font-medium text-center">{hoursByProject[it.project] != null ? `${hoursByProject[it.project]}h` : '—'}</span>
+                    <input
+                      type="number" min="0" step="0.5"
+                      className="w-full border border-blue-200 rounded px-1 py-1 text-xs text-blue-700 font-medium text-center focus:outline-none focus:ring-1 focus:ring-blue-400 bg-blue-50"
+                      value={hoursByProject[it.project] ?? ''}
+                      placeholder="0"
+                      onChange={e => { const v = parseFloat(e.target.value); if (!isNaN(v) && v >= 0) handleHoursChange(it.project, v); }}
+                    />
                     <EditableSelect
                       value={it.progress || '开发中'}
                       options={settings.progressOptions || DEFAULT_PROGRESS_OPTIONS}
@@ -1476,7 +1515,7 @@ function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeekl
     const existing = weeklyReports.find(r => r.weekStart === weekStart && r.weekEnd === weekEnd);
 
     const generated = generateReportFromRecords(weekStart, records, weekEnd);
-    const newReport = { id: uid(), ...generated, weekEnd, generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+    const newReport = { id: uid(), ...generated, weekEnd, autoAI: true, generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
 
     let newReports;
     if (existing) {
@@ -1587,7 +1626,7 @@ function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeekl
         </button>
       )}
       {selectedReport ? (
-        <ReportEditor report={selectedReport} onSave={handleSaveReport} settings={settings} setSettings={setSettings} weeklyReports={weeklyReports} workRecords={workRecords} />
+        <ReportEditor report={selectedReport} onSave={handleSaveReport} settings={settings} setSettings={setSettings} weeklyReports={weeklyReports} workRecords={workRecords} setWorkRecords={setWorkRecords} />
       ) : (
         <div className="flex flex-col items-center justify-center h-full text-gray-300">
           <svg className="w-16 h-16 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
