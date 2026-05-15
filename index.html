@@ -877,7 +877,7 @@ function SearchableProjectSelect({ projects, value, onChange, placeholder = '筛
 // ─────────────────────────────────────────
 // 周报编辑器
 // ─────────────────────────────────────────
-function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [] }) {
+function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [], workRecords = [] }) {
   const [items, setItems] = useState(report.items || []);
   const [nextItems, setNextItems] = useState(report.nextItems || []);
   const [markdown, setMarkdown] = useState(report.markdown || '');
@@ -993,6 +993,14 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
   const removeNextItem = (id) => setNextItems(nextItems.filter(i => i.id !== id));
   const updateNextItem = (id, field, val) => setNextItems(nextItems.map(i => i.id === id ? {...i, [field]: val} : i));
 
+  const weekRecords = useMemo(() => workRecords.filter(r => r.date >= report.weekStart && r.date <= report.weekEnd), [workRecords, report.weekStart, report.weekEnd]);
+  const hoursByProject = useMemo(() => {
+    const map = {};
+    weekRecords.forEach(r => { map[r.project] = (map[r.project] || 0) + r.hours; });
+    return map;
+  }, [weekRecords]);
+  const totalWeekHours = useMemo(() => weekRecords.reduce((s, r) => s + r.hours, 0), [weekRecords]);
+
   // providerLabels 从 settings 动态取
 
   return (
@@ -1089,13 +1097,19 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
                 </button>
               </div>
               <div className="border border-gray-200 rounded-lg overflow-hidden">
-                <div className="grid bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 px-3 py-2" style={{gridTemplateColumns:'1fr 2fr 1fr 1fr auto'}}>
-                  <span>项目</span><span>工作内容</span><span>项目进度</span><span>备注</span><span></span>
+                <div className="grid bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 px-3 py-2" style={{gridTemplateColumns:'1fr 2fr 60px 1fr 1fr auto'}}>
+                  <span>项目</span><span>工作内容</span><span>本周工时</span><span>项目进度</span><span>备注</span><span></span>
                 </div>
+                {totalWeekHours > 0 && (
+                  <div className="grid items-center px-3 py-2 gap-2 bg-blue-50 border-b border-blue-100 text-xs font-medium text-blue-700" style={{gridTemplateColumns:'1fr 2fr 60px 1fr 1fr auto'}}>
+                    <span>本周合计</span><span></span><span className="font-bold">{totalWeekHours}h</span><span></span><span></span><span></span>
+                  </div>
+                )}
                 {items.map((it, idx) => (
-                  <div key={it.id} className={`grid items-center px-3 py-2 gap-2 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`} style={{gridTemplateColumns:'1fr 2fr 1fr 1fr auto'}}>
+                  <div key={it.id} className={`grid items-center px-3 py-2 gap-2 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`} style={{gridTemplateColumns:'1fr 2fr 60px 1fr 1fr auto'}}>
                     <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.project} onChange={e => updateItem(it.id, 'project', e.target.value)} placeholder="项目名" />
                     <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.content} onChange={e => updateItem(it.id, 'content', e.target.value)} placeholder="工作内容" />
+                    <span className="text-xs text-blue-600 font-medium text-center">{hoursByProject[it.project] != null ? `${hoursByProject[it.project]}h` : '—'}</span>
                     <EditableSelect
                       value={it.progress || '开发中'}
                       options={settings.progressOptions || DEFAULT_PROGRESS_OPTIONS}
@@ -1573,7 +1587,7 @@ function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeekl
         </button>
       )}
       {selectedReport ? (
-        <ReportEditor report={selectedReport} onSave={handleSaveReport} settings={settings} setSettings={setSettings} weeklyReports={weeklyReports} />
+        <ReportEditor report={selectedReport} onSave={handleSaveReport} settings={settings} setSettings={setSettings} weeklyReports={weeklyReports} workRecords={workRecords} />
       ) : (
         <div className="flex flex-col items-center justify-center h-full text-gray-300">
           <svg className="w-16 h-16 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
