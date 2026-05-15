@@ -944,6 +944,8 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
   const [aiError, setAiError] = useState('');
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [showVersions, setShowVersions] = useState(false);
+  const [previewVersion, setPreviewVersion] = useState(null);
   const availableProviders = settings?.llm?.providers || DEFAULT_PROVIDERS;
   const [selectedProvider, setSelectedProvider] = useState(settings?.llm?.default || availableProviders[0]?.id || '');
 
@@ -957,7 +959,9 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
   const handleSave = () => {
     const md = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject);
     const parsed = mdMode ? parseMarkdownToReport(markdown) : { items, nextItems };
-    onSave({ ...report, ...parsed, markdown: md, updatedAt: new Date().toISOString() });
+    const ver = { id: uid(), savedAt: new Date().toISOString(), label: '手动保存', markdown: md, items: parsed.items, nextItems: parsed.nextItems };
+    const versions = [...(report.versions || []), ver].slice(-20);
+    onSave({ ...report, ...parsed, markdown: md, versions, updatedAt: new Date().toISOString() });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   };
@@ -1043,10 +1047,21 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
 4. 只输出Markdown内容，不要其他说明`;
 
       const settingsCopy = { ...settings, llm: { ...settings.llm, default: providerOverride || selectedProvider } };
+
+      // 生成前先快照当前内容（保护用户已编辑的内容）
+      const preMd = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject);
+      const preParsed = mdMode ? parseMarkdownToReport(markdown) : { items, nextItems };
+      let baseVersions = report.versions || [];
+      if (preMd || preParsed.items.length > 0) {
+        const ver = { id: uid(), savedAt: new Date().toISOString(), label: 'AI生成前', markdown: preMd, items: preParsed.items, nextItems: preParsed.nextItems };
+        baseVersions = [...baseVersions, ver].slice(-20);
+        onSave({ ...report, ...preParsed, markdown: preMd, versions: baseVersions, updatedAt: new Date().toISOString() });
+      }
+
       const result = await callAI(settingsCopy, prompt);
 
       // 保存 AI 原始输出，用于后续修正对比
-      onSave({ ...report, aiGenerated: result, updatedAt: new Date().toISOString() });
+      onSave({ ...report, aiGenerated: result, versions: baseVersions, updatedAt: new Date().toISOString() });
 
       setMarkdown(result);
       const parsed = parseMarkdownToReport(result);
@@ -1109,9 +1124,16 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
             <h3 className="font-semibold text-gray-800">第 {report.range} 周</h3>
             <span className="text-xs text-gray-400">{report.weekStart} ～ {report.weekEnd}</span>
           </div>
-          <button onClick={handleSave} className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${saved ? 'bg-green-500 text-white' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
-            {saved ? '已保存 ✓' : '保存'}
-          </button>
+          <div className="flex items-center gap-2">
+            {(report.versions || []).length > 0 && (
+              <button onClick={() => setShowVersions(true)} className="px-3 py-1.5 text-xs rounded-lg font-medium border border-gray-200 text-gray-500 hover:border-gray-300 hover:text-gray-700 transition-colors">
+                历史 ({(report.versions || []).length})
+              </button>
+            )}
+            <button onClick={handleSave} className={`px-3 py-1.5 text-xs rounded-lg font-medium transition-colors ${saved ? 'bg-green-500 text-white' : 'bg-blue-600 text-white hover:bg-blue-700'}`}>
+              {saved ? '已保存 ✓' : '保存'}
+            </button>
+          </div>
         </div>
         {/* 行2：AI + 模式切换（统一高度 h-8） */}
         <div className="flex items-center gap-2 px-5 pb-3 flex-wrap">
@@ -1251,6 +1273,54 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
           </>
         )}
       </div>
+
+      {/* 历史版本面板 */}
+      {showVersions && (
+        <div className="fixed inset-0 z-50 flex" style={{top:0,left:0}}>
+          <div className="flex-1 bg-black/20" onClick={() => { setShowVersions(false); setPreviewVersion(null); }} />
+          <div className="w-80 bg-white shadow-2xl flex flex-col border-l border-gray-200 overflow-hidden">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100 bg-gray-50">
+              <span className="font-semibold text-sm text-gray-800">历史版本</span>
+              <button onClick={() => { setShowVersions(false); setPreviewVersion(null); }} className="text-gray-400 hover:text-gray-600 text-lg leading-none">&times;</button>
+            </div>
+            {previewVersion ? (
+              <div className="flex flex-col flex-1 overflow-hidden">
+                <div className="flex items-center gap-2 px-4 py-2 border-b border-gray-100 bg-white">
+                  <button onClick={() => setPreviewVersion(null)} className="text-xs text-gray-500 hover:text-gray-700">← 返回列表</button>
+                  <span className="text-xs text-gray-400 flex-1 truncate">{previewVersion.label} · {new Date(previewVersion.savedAt).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+                  <button
+                    onClick={() => {
+                      setItems(previewVersion.items || []);
+                      setNextItems(previewVersion.nextItems || []);
+                      setMarkdown(previewVersion.markdown || '');
+                      setMdMode(false);
+                      setShowVersions(false);
+                      setPreviewVersion(null);
+                    }}
+                    className="shrink-0 px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700"
+                  >恢复此版本</button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-4">
+                  <pre className="text-xs text-gray-700 whitespace-pre-wrap font-sans leading-relaxed">{previewVersion.markdown || (previewVersion.items || []).map(it => `• ${it.project}：${it.content}`).join('\n') || '（无内容）'}</pre>
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto">
+                {[...(report.versions || [])].reverse().map((v, i) => (
+                  <div key={v.id} className="px-4 py-3 border-b border-gray-50 hover:bg-gray-50 cursor-pointer" onClick={() => setPreviewVersion(v)}>
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${v.label === 'AI生成前' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>{v.label}</span>
+                      <span className="text-xs text-gray-400 shrink-0">{new Date(v.savedAt).toLocaleString('zh-CN', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})}</span>
+                    </div>
+                    <div className="mt-1 text-xs text-gray-400 truncate">{v.markdown ? v.markdown.slice(0, 60) : (v.items || []).map(it => it.project).join('、') || '（空）'}</div>
+                  </div>
+                ))}
+                {(report.versions || []).length === 0 && <div className="text-center text-gray-300 text-sm py-8">暂无历史版本</div>}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
