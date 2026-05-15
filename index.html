@@ -766,14 +766,37 @@ function WorkbenchPage({ workRecords, setWorkRecords, settings }) {
 // ─────────────────────────────────────────
 function EditableSelect({ value, options, onChange, onAddOption, placeholder = '选择', className = '' }) {
   const [open, setOpen] = React.useState(false);
+  const [portalStyle, setPortalStyle] = React.useState({});
   const [custom, setCustom] = React.useState('');
-  const ref = React.useRef(null);
+  const triggerRef = React.useRef(null);
+  const dropdownRef = React.useRef(null);
 
   React.useEffect(() => {
-    const handler = e => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    const handler = e => {
+      if (
+        triggerRef.current && !triggerRef.current.contains(e.target) &&
+        dropdownRef.current && !dropdownRef.current.contains(e.target)
+      ) setOpen(false);
+    };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  const handleToggle = () => {
+    if (!open) {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (rect) {
+        const minW = Math.max(160, rect.width);
+        const spaceBelow = window.innerHeight - rect.bottom;
+        if (spaceBelow < 240) {
+          setPortalStyle({ position: 'fixed', bottom: window.innerHeight - rect.top + 4, right: window.innerWidth - rect.right, minWidth: minW, zIndex: 9999 });
+        } else {
+          setPortalStyle({ position: 'fixed', top: rect.bottom + 4, right: window.innerWidth - rect.right, minWidth: minW, zIndex: 9999 });
+        }
+      }
+    }
+    setOpen(o => !o);
+  };
 
   const addCustom = () => {
     const v = custom.trim();
@@ -784,39 +807,42 @@ function EditableSelect({ value, options, onChange, onAddOption, placeholder = '
     setOpen(false);
   };
 
+  const dropdown = open && ReactDOM.createPortal(
+    <div ref={dropdownRef} style={portalStyle} className="bg-white border border-gray-200 rounded-lg shadow-lg">
+      <div className="max-h-44 overflow-y-auto">
+        {options.map(o => (
+          <div key={o}
+            className={`px-3 py-1.5 text-xs cursor-pointer hover:bg-blue-50 ${o === value ? 'text-blue-600 font-medium bg-blue-50' : 'text-gray-700'}`}
+            onMouseDown={e => { e.preventDefault(); onChange(o); setOpen(false); }}
+          >{o}</div>
+        ))}
+      </div>
+      <div className="border-t border-gray-100 p-2 flex gap-1">
+        <input
+          className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-300"
+          placeholder="自定义…"
+          value={custom}
+          onChange={e => setCustom(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } }}
+          onMouseDown={e => e.stopPropagation()}
+        />
+        <button type="button" onMouseDown={e => { e.preventDefault(); addCustom(); }} className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">+</button>
+      </div>
+    </div>,
+    document.body
+  );
+
   return (
-    <div ref={ref} className={`relative ${className}`} onClick={e => e.stopPropagation()}>
+    <div ref={triggerRef} className={`relative ${className}`} onClick={e => e.stopPropagation()}>
       <button
         type="button"
-        onClick={() => setOpen(o => !o)}
+        onClick={handleToggle}
         className="border border-gray-200 rounded px-2 py-1 text-xs text-left w-full flex items-center justify-between gap-1 bg-white hover:border-blue-300"
       >
         <span className={value ? 'text-gray-800' : 'text-gray-400'}>{value || placeholder}</span>
         <span className="text-gray-400 shrink-0">▾</span>
       </button>
-      {open && (
-        <div className="absolute z-50 bg-white border border-gray-200 rounded-lg shadow-lg mt-1" style={{minWidth:'160px', right:0}}>
-          <div className="max-h-44 overflow-y-auto">
-            {options.map(o => (
-              <div key={o}
-                className={`px-3 py-1.5 text-xs cursor-pointer hover:bg-blue-50 ${o === value ? 'text-blue-600 font-medium bg-blue-50' : 'text-gray-700'}`}
-                onMouseDown={e => { e.preventDefault(); onChange(o); setOpen(false); }}
-              >{o}</div>
-            ))}
-          </div>
-          <div className="border-t border-gray-100 p-2 flex gap-1">
-            <input
-              className="flex-1 text-xs border border-gray-200 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-300"
-              placeholder="自定义…"
-              value={custom}
-              onChange={e => setCustom(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addCustom(); } }}
-              onMouseDown={e => e.stopPropagation()}
-            />
-            <button type="button" onMouseDown={e => { e.preventDefault(); addCustom(); }} className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">+</button>
-          </div>
-        </div>
-      )}
+      {dropdown}
     </div>
   );
 }
