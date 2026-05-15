@@ -265,7 +265,7 @@ ${lines}
 
 要求：
 1. 生成"本周工作内容"和"下周工作计划"两个部分
-2. 本周工作内容用 Markdown 表格，列为：项目 | 工作内容 | 项目进度 | 备注
+2. 本周工作内容用 Markdown 表格，列为：项目 | 工时 | 工作内容 | 项目进度 | 备注（工时填写实际工时，如"9h"）
 3. 下周工作计划也用表格，列为：项目 | 工作内容
 4. 在最前面加上问候语：您好：\n\n本周(${range})的工作总结具体如下，请查收。
 5. 只输出 Markdown 内容，不要其他说明`;
@@ -278,20 +278,24 @@ function generateReportFromRecords(weekStart, records, weekEnd) {
   weekEnd = weekEnd || getSunday(weekStart);
   const range = getCustomRange(weekStart, weekEnd);
 
-  // 按项目分组
+  // 按项目分组，同时统计工时
   const byProject = {};
   records.forEach(r => {
-    if (!byProject[r.project]) byProject[r.project] = [];
-    byProject[r.project].push(r);
+    if (!byProject[r.project]) byProject[r.project] = { recs: [], hours: 0 };
+    byProject[r.project].recs.push(r);
+    byProject[r.project].hours += r.hours || 0;
   });
 
-  const items = Object.entries(byProject).map(([project, recs]) => ({
+  const items = Object.entries(byProject).map(([project, { recs }]) => ({
     id: uid(),
     project,
     content: recs.map(r => r.content).join('；'),
     progress: '开发中',
     note: '',
   }));
+
+  const hoursByProject = {};
+  Object.entries(byProject).forEach(([p, { hours }]) => { hoursByProject[p] = hours; });
 
   const nextItems = items.map(it => ({
     id: uid(),
@@ -300,11 +304,7 @@ function generateReportFromRecords(weekStart, records, weekEnd) {
   }));
 
   let md = `您好：\n\n本周(${range})的工作总结具体如下，请查收。\n\n`;
-  md += `## 本周工作内容\n\n`;
-  md += `| 项目 | 工作内容 | 项目进度 | 备注 |\n|------|----------|----------|------|\n`;
-  items.forEach(it => {
-    md += `| ${it.project} | ${it.content} | ${it.progress} | ${it.note} |\n`;
-  });
+  md += buildMarkdownTable(items, hoursByProject);
   md += `\n## 下周工作计划\n\n`;
   md += `| 项目 | 工作内容 |\n|------|----------|\n`;
   nextItems.forEach(it => {
@@ -314,18 +314,41 @@ function generateReportFromRecords(weekStart, records, weekEnd) {
   return { items, nextItems, markdown: md, weekStart, weekEnd, range };
 }
 
+// 生成本周工作内容 Markdown 表格（含工时列）
+function buildMarkdownTable(items, hoursByProject) {
+  let md = `## 本周工作内容\n\n`;
+  md += `| 项目 | 工时 | 工作内容 | 项目进度 | 备注 |\n|------|------|----------|----------|------|\n`;
+  items.forEach(it => {
+    const h = hoursByProject && hoursByProject[it.project] != null ? `${hoursByProject[it.project]}h` : '';
+    md += `| ${it.project} | ${h} | ${it.content||''} | ${it.progress||''} | ${it.note||''} |\n`;
+  });
+  return md;
+}
+
 function parseMarkdownToReport(md) {
   const items = [];
   const nextItems = [];
   const lines = md.split('\n');
   let section = '';
+  let hasHoursCol = false;
   for (const line of lines) {
     if (line.includes('本周工作内容')) { section = 'current'; continue; }
     if (line.includes('下周工作计划')) { section = 'next'; continue; }
-    if (section === 'current' && line.startsWith('|') && !line.includes('---') && !line.includes('项目')) {
+    // 检测本周工作内容表头，判断是否有工时列
+    if (section === 'current' && line.startsWith('|') && line.includes('项目')) {
+      hasHoursCol = line.includes('工时');
+      continue;
+    }
+    if (section === 'current' && line.startsWith('|') && !line.includes('---')) {
       const cols = line.split('|').map(s => s.trim()).filter(Boolean);
       if (cols.length >= 2) {
-        items.push({ id: uid(), project: cols[0]||'', content: cols[1]||'', progress: cols[2]||'开发中', note: cols[3]||'' });
+        if (hasHoursCol) {
+          // 新格式：项目 | 工时 | 工作内容 | 项目进度 | 备注
+          items.push({ id: uid(), project: cols[0]||'', content: cols[2]||'', progress: cols[3]||'开发中', note: cols[4]||'' });
+        } else {
+          // 旧格式：项目 | 工作内容 | 项目进度 | 备注
+          items.push({ id: uid(), project: cols[0]||'', content: cols[1]||'', progress: cols[2]||'开发中', note: cols[3]||'' });
+        }
       }
     }
     if (section === 'next' && line.startsWith('|') && !line.includes('---') && !line.includes('项目')) {
@@ -338,14 +361,10 @@ function parseMarkdownToReport(md) {
   return { items, nextItems };
 }
 
-function buildMarkdown(report) {
+function buildMarkdown(report, hoursByProject) {
   const range = report.range || getWeekRange(report.weekStart);
   let md = `您好：\n\n本周(${range})的工作总结具体如下，请查收。\n\n`;
-  md += `## 本周工作内容\n\n`;
-  md += `| 项目 | 工作内容 | 项目进度 | 备注 |\n|------|----------|----------|------|\n`;
-  (report.items||[]).forEach(it => {
-    md += `| ${it.project} | ${it.content} | ${it.progress||''} | ${it.note||''} |\n`;
-  });
+  md += buildMarkdownTable(report.items || [], hoursByProject || {});
   md += `\n## 下周工作计划\n\n`;
   md += `| 项目 | 工作内容 |\n|------|----------|\n`;
   (report.nextItems||[]).forEach(it => {
@@ -935,7 +954,7 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
   }, [report.id]);
 
   const handleSave = () => {
-    const md = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems });
+    const md = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject);
     const parsed = mdMode ? parseMarkdownToReport(markdown) : { items, nextItems };
     onSave({ ...report, ...parsed, markdown: md, updatedAt: new Date().toISOString() });
     setSaved(true);
@@ -943,7 +962,7 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
   };
 
   const handleCopy = () => {
-    const md = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems });
+    const md = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject);
     navigator.clipboard.writeText(md);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
@@ -1010,9 +1029,15 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
         prompt += `\n\n`;
       }
 
+      // 按项目汇总工时供 AI 参考
+      const aiHoursByProject = {};
+      weekRecords.forEach(r => { aiHoursByProject[r.project] = (aiHoursByProject[r.project] || 0) + r.hours; });
+      const hoursLines = Object.entries(aiHoursByProject).map(([p, h]) => `- 项目「${p}」：${h}h`).join('\n');
+      if (hoursLines) prompt += `【本周各项目工时汇总】\n${hoursLines}\n\n`;
+
       prompt += `要求：
 1. 开头加上：您好：\n\n本周(${report.range})的工作总结具体如下，请查收。
-2. 生成"本周工作内容"表格，列：项目 | 工作内容 | 项目进度 | 备注
+2. 生成"本周工作内容"表格，列：项目 | 工时 | 工作内容 | 项目进度 | 备注（工时填写实际工时，如"9h"）
 3. 生成"下周工作计划"表格，列：项目 | 工作内容（根据本周进展合理推测，用户会自行修改）
 4. 只输出Markdown内容，不要其他说明`;
 
@@ -1110,7 +1135,7 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
           </div>
           <div className="flex bg-gray-50 border border-gray-200 rounded-lg overflow-hidden text-xs h-8">
             <button onClick={() => { setMdMode(false); setMdPreview(false); }} className={`px-3 h-full transition-colors ${!mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>结构化</button>
-            <button onClick={() => setMdMode(true)} className={`px-3 h-full transition-colors ${mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Markdown</button>
+            <button onClick={() => { if (!mdMode) setMarkdown(buildMarkdown({ ...report, items, nextItems }, hoursByProject)); setMdMode(true); }} className={`px-3 h-full transition-colors ${mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Markdown</button>
           </div>
         </div>
       </div>
