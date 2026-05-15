@@ -1055,13 +1055,13 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
       if (preMd || preParsed.items.length > 0) {
         const ver = { id: uid(), savedAt: new Date().toISOString(), label: 'AI生成前', markdown: preMd, items: preParsed.items, nextItems: preParsed.nextItems };
         baseVersions = [...baseVersions, ver].slice(-20);
-        onSave({ ...report, ...preParsed, markdown: preMd, versions: baseVersions, updatedAt: new Date().toISOString() });
+        onSave({ ...report, autoAI: false, ...preParsed, markdown: preMd, versions: baseVersions, updatedAt: new Date().toISOString() });
       }
 
       const result = await callAI(settingsCopy, prompt);
 
       // 保存 AI 原始输出，用于后续修正对比
-      onSave({ ...report, aiGenerated: result, versions: baseVersions, updatedAt: new Date().toISOString() });
+      onSave({ ...report, autoAI: false, aiGenerated: result, versions: baseVersions, updatedAt: new Date().toISOString() });
 
       setMarkdown(result);
       const parsed = parseMarkdownToReport(result);
