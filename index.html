@@ -2794,12 +2794,16 @@ function App() {
         // 若 Supabase 有保存过 settings，以 Supabase 为准（本地 settings 与其合并，优先保留 Supabase 的 apiKey）
         if (data.settings) setSettingsRaw(prev => {
           const remote = data.settings;
-          // 合并：远端 providers 的 apiKey 优先；本地有而远端没有的字段保留
           const remoteById = {};
           (remote.llm?.providers || []).forEach(p => { remoteById[p.id] = p; });
           const localById = {};
           (prev.llm?.providers || []).forEach(p => { localById[p.id] = p; });
-          const mergedProviders = DEFAULT_PROVIDERS.map(p => ({ ...p, ...(localById[p.id] || {}), ...(remoteById[p.id] || {}) }));
+          // apiKey 取非空值优先：本地已有 apiKey 则不被远端空值覆盖
+          const mergedProviders = DEFAULT_PROVIDERS.map(p => {
+            const local = localById[p.id] || {};
+            const remote = remoteById[p.id] || {};
+            return { ...p, ...local, ...remote, apiKey: remote.apiKey || local.apiKey || p.apiKey };
+          });
           return { ...prev, ...remote, llm: { ...prev.llm, ...remote.llm, providers: mergedProviders } };
         });
       }
