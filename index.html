@@ -1238,7 +1238,7 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
                       value={it.progress || '开发中'}
                       options={settings.progressOptions || DEFAULT_PROGRESS_OPTIONS}
                       onChange={v => updateItem(it.id, 'progress', v)}
-                      onAddOption={v => setSettings({ ...settings, progressOptions: [...(settings.progressOptions || DEFAULT_PROGRESS_OPTIONS), v] })}
+                      onAddOption={v => setSettings(prev => ({ ...prev, progressOptions: [...(prev.progressOptions || DEFAULT_PROGRESS_OPTIONS), v] }))}
                     />
                     <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.note||''} onChange={e => updateItem(it.id, 'note', e.target.value)} placeholder="备注" />
                     <button onClick={() => removeItem(it.id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">&times;</button>
@@ -2053,10 +2053,10 @@ function ProjectSummaryPage({ workRecords, weeklyReports = [], settings, setSett
   const statusOptions = settings?.statusOptions || DEFAULT_STATUS_OPTIONS;
 
   const setProjectStatus = (project, status) => {
-    setSettings({ ...settings, projectStatuses: { ...projectStatuses, [project]: status } });
+    setSettings(prev => ({ ...prev, projectStatuses: { ...(prev.projectStatuses || {}), [project]: status } }));
   };
   const addStatusOption = v => {
-    setSettings({ ...settings, statusOptions: [...statusOptions, v] });
+    setSettings(prev => ({ ...prev, statusOptions: [...(prev.statusOptions || DEFAULT_STATUS_OPTIONS), v] }));
   };
 
   const allStats = useMemo(() => {
@@ -2924,7 +2924,7 @@ function App() {
 
   const setWorkRecords = (v) => setWorkRecordsRaw(typeof v === 'function' ? v(workRecords) : v);
   const setWeeklyReports = (v) => setWeeklyReportsRaw(typeof v === 'function' ? v(weeklyReports) : v);
-  const setSettings = (v) => setSettingsRaw(typeof v === 'function' ? v(settings) : v);
+  const setSettings = (v) => setSettingsRaw(v);
 
   // ── 从 Supabase 加载数据 ──
   const loadData = useCallback(async () => {
