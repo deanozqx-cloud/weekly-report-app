@@ -210,33 +210,8 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
               type="number" min="1" max="24" step="0.5"
               className="border border-gray-200 rounded-lg px-3 py-2 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-blue-300"
               value={settings.defaultHours}
-              onChange={e => setSettings({ ...settings, defaultHours: parseFloat(e.target.value) })}
+              onChange={e => { const v = parseFloat(e.target.value); setSettings({ ...settings, defaultHours: isNaN(v) ? '' : v }); }}
             />
-          </div>
-        </div>
-
-        {/* ── 自动提醒 ── */}
-        <div>
-          <h3 className="font-medium text-gray-700 mb-3">自动生成提醒</h3>
-          <div className="space-y-3">
-            <label className="flex items-center gap-3 cursor-pointer">
-              <div className={`relative w-10 h-6 rounded-full transition-colors ${settings.autoGenerate.enabled ? 'bg-blue-600' : 'bg-gray-200'}`}
-                onClick={() => setSettings({ ...settings, autoGenerate: { ...settings.autoGenerate, enabled: !settings.autoGenerate.enabled } })}>
-                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full shadow transition-all ${settings.autoGenerate.enabled ? 'left-5' : 'left-1'}`}></div>
-              </div>
-              <span className="text-sm text-gray-600">周五自动提醒生成周报</span>
-            </label>
-            {settings.autoGenerate.enabled && (
-              <div className="flex items-center gap-3 pl-1">
-                <label className="text-sm text-gray-600">提醒时间</label>
-                <input
-                  type="time"
-                  className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-                  value={settings.autoGenerate.time}
-                  onChange={e => setSettings({ ...settings, autoGenerate: { ...settings.autoGenerate, time: e.target.value } })}
-                />
-              </div>
-            )}
           </div>
         </div>
 

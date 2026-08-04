@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import * as XLSX from 'xlsx';
-import { fmt, getSunday, getMonday } from '../../lib/utils';
+import { fmt, today, getSunday, getMonday } from '../../lib/utils';
 import Modal from '../ui/Modal';
 
 export default function ImportModal({ onClose, onImport, weeklyReports }) {
@@ -16,10 +16,16 @@ export default function ImportModal({ onClose, onImport, weeklyReports }) {
       return fmt(d);
     }
     if (typeof val === 'string') {
+      // 带年份：如「2025年5月9日」
+      const my = val.match(/(\d{4})年\s*(\d+)月(\d+)/);
+      if (my) return `${my[1]}-${String(my[2]).padStart(2,'0')}-${String(my[3]).padStart(2,'0')}`;
       const m = val.match(/(\d+)月(\d+)/);
       if (m) {
+        // 无年份默认当前年；导入的是历史数据，若结果在未来则回退到上一年
         const year = new Date().getFullYear();
-        return `${year}-${String(m[1]).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`;
+        let dateStr = `${year}-${String(m[1]).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`;
+        if (dateStr > today()) dateStr = `${year - 1}${dateStr.slice(4)}`;
+        return dateStr;
       }
       const d = new Date(val);
       if (!isNaN(d)) return fmt(d);

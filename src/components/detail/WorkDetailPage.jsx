@@ -24,6 +24,7 @@ export default function WorkDetailPage({ workRecords, setWorkRecords }) {
     list.sort((a, b) => {
       const va = field === 'hours' ? a.hours : a[field];
       const vb = field === 'hours' ? b.hours : b[field];
+      if (va === vb) return 0;
       return dir === 'asc' ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
     });
     return list;

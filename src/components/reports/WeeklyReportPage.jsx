@@ -27,7 +27,13 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
 
     let newReports;
     if (existing) {
-      newReports = weeklyReports.map(r => (r.weekStart === weekStart && r.weekEnd === weekEnd) ? { ...newReport, id: r.id } : r);
+      // 覆盖时保留版本历史，并把被覆盖的旧内容存为快照
+      newReports = weeklyReports.map(r => {
+        if (!(r.weekStart === weekStart && r.weekEnd === weekEnd)) return r;
+        const snap = { id: uid(), savedAt: new Date().toISOString(), label: '覆盖前', markdown: r.markdown || '', items: r.items || [], nextItems: r.nextItems || [] };
+        const versions = [...(r.versions || []), snap].slice(-20);
+        return { ...newReport, id: r.id, versions };
+      });
     } else {
       newReports = [newReport, ...weeklyReports].sort((a, b) => b.weekStart.localeCompare(a.weekStart));
     }
@@ -36,7 +42,8 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
   };
 
   const handleSaveReport = (updated) => {
-    setWeeklyReports(weeklyReports.map(r => r.id === updated.id ? updated : r));
+    // 函数式更新：AI 生成流程会在 await 前后各保存一次，不能 map 渲染期快照
+    setWeeklyReports(prev => prev.map(r => r.id === updated.id ? updated : r));
   };
 
   const handleDeleteReport = (id) => {
@@ -66,7 +73,13 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
       const generated = generateReportFromRecords(w.weekStart, w.records, w.weekEnd);
       const newReport = { id: uid(), ...generated, weekEnd: w.weekEnd, generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       if (isConflict && conflict === 'overwrite') {
-        newReports = newReports.map(r => r.weekEnd === w.weekEnd ? { ...newReport, id: r.id } : r);
+        // 覆盖时保留版本历史，并把被覆盖的旧内容存为快照
+        newReports = newReports.map(r => {
+          if (r.weekEnd !== w.weekEnd) return r;
+          const snap = { id: uid(), savedAt: new Date().toISOString(), label: '覆盖前', markdown: r.markdown || '', items: r.items || [], nextItems: r.nextItems || [] };
+          const versions = [...(r.versions || []), snap].slice(-20);
+          return { ...newReport, id: r.id, versions };
+        });
       } else {
         newReports.push(newReport);
       }

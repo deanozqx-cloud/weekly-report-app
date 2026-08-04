@@ -49,9 +49,10 @@ export default function App() {
     return s;
   }, [settings]);
 
-  const setWorkRecords = (v) => setWorkRecordsRaw(typeof v === 'function' ? v(workRecords) : v);
-  const setWeeklyReports = (v) => setWeeklyReportsRaw(typeof v === 'function' ? v(weeklyReports) : v);
-  const setSettings = (v) => setSettingsRaw(v);
+  // useStorage 已支持函数式更新，直接透传（避免用渲染期快照解包导致的过期状态覆盖）
+  const setWorkRecords = setWorkRecordsRaw;
+  const setWeeklyReports = setWeeklyReportsRaw;
+  const setSettings = setSettingsRaw;
 
   const loadData = useCallback(async () => {
     setSyncStatus('loading');
@@ -71,6 +72,14 @@ export default function App() {
             const rem = remoteById[p.id] || {};
             return { ...p, ...local, ...rem, apiKey: rem.apiKey || local.apiKey || p.apiKey };
           });
+          // 保留用户自行添加的自定义 provider（id 不在 DEFAULT_PROVIDERS 中），远端与本地合并、远端优先
+          const defaultIds = new Set(DEFAULT_PROVIDERS.map(p => p.id));
+          const customById = {};
+          (prev.llm?.providers || []).forEach(p => { if (!defaultIds.has(p.id)) customById[p.id] = p; });
+          (remote.llm?.providers || []).forEach(p => {
+            if (!defaultIds.has(p.id)) customById[p.id] = { ...(customById[p.id] || {}), ...p, apiKey: p.apiKey || customById[p.id]?.apiKey || '' };
+          });
+          Object.values(customById).forEach(p => mergedProviders.push(p));
           return { ...prev, ...remote, llm: { ...prev.llm, ...remote.llm, providers: mergedProviders } };
         });
       }
@@ -110,7 +119,7 @@ export default function App() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // 数据变化时自动保存（防抖 3s）
+  // 数据变化时自动保存（防抖 3s）—— 含 settings，确保 API Key 等配置修改也会自动云同步
   useEffect(() => {
     if (!currentUser || syncStatus === 'loading') return;
     clearTimeout(autoSaveTimer.current);
@@ -118,7 +127,7 @@ export default function App() {
       saveData(workRecords, weeklyReports);
     }, 3000);
     return () => clearTimeout(autoSaveTimer.current);
-  }, [workRecords, weeklyReports]);
+  }, [workRecords, weeklyReports, settings]);
 
   const handleLogin = (user) => {
     setCurrentUser(user);

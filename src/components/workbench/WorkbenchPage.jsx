@@ -122,6 +122,7 @@ export default function WorkbenchPage({ workRecords, setWorkRecords, settings })
             record={editRecord}
             date={selectedDate}
             projects={projects}
+            defaultHours={settings?.defaultHours}
             onSave={handleSave}
             onClose={() => { setShowForm(false); setEditRecord(null); }}
           />

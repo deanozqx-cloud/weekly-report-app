@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { HOLIDAYS, WORKDAYS } from '../../lib/constants';
-import { today, isWeekend } from '../../lib/utils';
+import { today, toDate, isWeekend } from '../../lib/utils';
 
 export default function CalendarView({ workRecords, selectedDate, onSelectDate }) {
   const [viewDate, setViewDate] = useState(() => {
@@ -96,7 +96,7 @@ export default function CalendarView({ workRecords, selectedDate, onSelectDate }
               onClick={() => onSelectDate(dateStr)}
             >
               <span className={`text-sm font-medium ${textClass} ${isToday && !isSelected ? 'ring-2 ring-blue-400 rounded-full w-6 h-6 flex items-center justify-center' : ''}`}>
-                {new Date(dateStr).getDate()}
+                {toDate(dateStr).getDate()}
               </span>
               {holiday && (
                 <span className={`text-xs leading-tight text-center ${isSelected ? 'text-blue-100' : 'text-red-400'}`} style={{fontSize:'9px',lineHeight:'1.1',maxWidth:'100%'}}>
