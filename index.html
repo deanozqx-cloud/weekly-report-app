@@ -61,17 +61,17 @@ const HOLIDAYS = {
   '2025-05-31': '端午节', '2025-06-01': '端午节', '2025-06-02': '端午节',
   '2025-10-01': '国庆节', '2025-10-02': '国庆节', '2025-10-03': '国庆节',
   '2025-10-04': '中秋节', '2025-10-05': '国庆节', '2025-10-06': '国庆节',
-  '2025-10-07': '国庆节',
-  // 2026
+  '2025-10-07': '国庆节', '2025-10-08': '国庆节',
+  // 2026（依据国务院办公厅 2026 年节假日安排通知）
   '2026-01-01': '元旦', '2026-01-02': '元旦', '2026-01-03': '元旦',
-  '2026-02-17': '春节', '2026-02-18': '春节', '2026-02-19': '春节',
-  '2026-02-20': '春节', '2026-02-21': '春节', '2026-02-22': '春节',
-  '2026-02-23': '春节', '2026-02-24': '春节',
-  '2026-04-05': '清明节', '2026-04-06': '清明节', '2026-04-07': '清明节',
+  '2026-02-15': '春节', '2026-02-16': '春节', '2026-02-17': '春节',
+  '2026-02-18': '春节', '2026-02-19': '春节', '2026-02-20': '春节',
+  '2026-02-21': '春节', '2026-02-22': '春节', '2026-02-23': '春节',
+  '2026-04-04': '清明节', '2026-04-05': '清明节', '2026-04-06': '清明节',
   '2026-05-01': '劳动节', '2026-05-02': '劳动节', '2026-05-03': '劳动节',
   '2026-05-04': '劳动节', '2026-05-05': '劳动节',
-  '2026-06-18': '端午节', '2026-06-19': '端午节', '2026-06-20': '端午节',
-  '2026-09-24': '中秋节', '2026-09-25': '中秋节', '2026-09-26': '中秋节', '2026-09-27': '中秋节',
+  '2026-06-19': '端午节', '2026-06-20': '端午节', '2026-06-21': '端午节',
+  '2026-09-25': '中秋节', '2026-09-26': '中秋节', '2026-09-27': '中秋节',
   '2026-10-01': '国庆节', '2026-10-02': '国庆节', '2026-10-03': '国庆节',
   '2026-10-04': '国庆节', '2026-10-05': '国庆节', '2026-10-06': '国庆节',
   '2026-10-07': '国庆节',
@@ -85,15 +85,14 @@ const WORKDAYS = {
   '2025-04-27': '调休', // 劳动节前
   '2025-09-28': '调休', // 国庆前
   '2025-10-11': '调休', // 国庆后
-  // 2026
-  '2026-02-15': '调休', // 春节前
+  // 2026（依据国务院办公厅 2026 年节假日安排通知）
+  '2026-01-04': '调休', // 元旦后
+  '2026-02-14': '调休', // 春节前
   '2026-02-28': '调休', // 春节后
-  '2026-04-26': '调休', // 劳动节前
   '2026-05-09': '调休', // 劳动节后
+  '2026-09-20': '调休', // 国庆前
   '2026-10-10': '调休', // 国庆后
 };
-
-const PROGRESS_OPTIONS = ['前期方案', '需求中', '开发中', '测试中', '已上线', '已完成'];
 
 // ─────────────────────────────────────────
 // 工具函数
@@ -200,14 +199,26 @@ async function callAI(settings, prompt) {
   if (!cfg) throw new Error(`未找到 provider "${providerId}"，请检查设置`);
   if (!cfg.apiKey) throw new Error(`请先在设置中为「${cfg.label || cfg.id}」配置 API Key`);
 
+  // 错误响应可能不是 JSON（网关 502、HTML 错误页等），安全解析避免掩盖真实错误
+  const readError = async (res) => {
+    try { const e = await res.json(); return e.error?.message || res.statusText; }
+    catch { return `${res.status} ${res.statusText}`; }
+  };
+
   if (cfg.apiType === 'claude') {
     const baseUrl = (cfg.baseUrl || 'https://api.anthropic.com/v1').replace(/\/$/, '');
     const res = await fetch(`${baseUrl}/messages`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': cfg.apiKey, 'anthropic-version': '2023-06-01' },
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': cfg.apiKey,
+        'anthropic-version': '2023-06-01',
+        // 浏览器直连 Anthropic API 必需此头，否则被 CORS 拦截
+        'anthropic-dangerous-direct-browser-access': 'true',
+      },
       body: JSON.stringify({ model: cfg.model, max_tokens: 2048, messages: [{ role: 'user', content: prompt }] }),
     });
-    if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message || res.statusText); }
+    if (!res.ok) throw new Error(await readError(res));
     const data = await res.json();
     return data.content[0].text;
   } else {
@@ -217,7 +228,7 @@ async function callAI(settings, prompt) {
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
       body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 2048 }),
     });
-    if (!res.ok) { const e = await res.json(); throw new Error(e.error?.message || res.statusText); }
+    if (!res.ok) throw new Error(await readError(res));
     const data = await res.json();
     return data.choices[0].message.content;
   }
@@ -260,23 +271,6 @@ async function sbSave(workRecords, weeklyReports, settings) {
       { onConflict: 'user_id' }
     ).then(() => {}).catch(() => {});
   }
-}
-
-function buildReportPrompt(weekStart, records, defaultHours) {
-  const range = getWeekRange(weekStart);
-  const lines = records.map(r => `- 项目「${r.project}」：${r.content}（工时${r.hours}h）`).join('\n');
-  return `你是一个助手，请根据以下本周工作记录生成一份工作周报（Markdown 格式）。
-
-本周时间范围：${range}
-工作记录：
-${lines}
-
-要求：
-1. 生成"本周工作内容"和"下周工作计划"两个部分
-2. 本周工作内容用 Markdown 表格，列为：项目 | 工时 | 工作内容 | 项目进度 | 备注（工时填写实际工时，如"9h"）
-3. 下周工作计划也用表格，列为：项目 | 工作内容
-4. 在最前面加上问候语：您好：\n\n本周(${range})的工作总结具体如下，请查收。
-5. 只输出 Markdown 内容，不要其他说明`;
 }
 
 // ─────────────────────────────────────────
@@ -333,37 +327,47 @@ function buildMarkdownTable(items, hoursByProject) {
   return md;
 }
 
+// 切分 Markdown 表格行为单元格数组，保留空单元格（不能 filter(Boolean)，否则空列导致后续列错位）
+function splitTableRow(line) {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map(c => c.trim());
+}
+// 是否为表头分隔行，如 | --- | :---: |
+const isTableSeparator = (line) => /^\|?[\s\-:|]+\|?$/.test(line.trim()) && line.includes('-');
+
 function parseMarkdownToReport(md) {
   const items = [];
   const nextItems = [];
   const lines = md.split('\n');
   let section = '';
   let hasHoursCol = false;
+  let headerSeen = false; // 每个 section 内第一个表格行视为表头（不能用 includes('项目') 判断，项目名含"项目"二字的数据行会被误判）
   for (const line of lines) {
-    if (line.includes('本周工作内容')) { section = 'current'; continue; }
-    if (line.includes('下周工作计划')) { section = 'next'; continue; }
-    // 检测本周工作内容表头，判断是否有工时列
-    if (section === 'current' && line.startsWith('|') && line.includes('项目')) {
-      hasHoursCol = line.includes('工时');
+    if (line.includes('本周工作内容')) { section = 'current'; headerSeen = false; continue; }
+    if (line.includes('下周工作计划')) { section = 'next'; headerSeen = false; continue; }
+    if (!section || !line.trim().startsWith('|')) continue;
+    if (isTableSeparator(line)) continue;
+    if (!headerSeen) {
+      // 表头行：本周表检测是否含工时列
+      if (section === 'current') hasHoursCol = line.includes('工时');
+      headerSeen = true;
       continue;
     }
-    if (section === 'current' && line.startsWith('|') && !line.includes('---')) {
-      const cols = line.split('|').map(s => s.trim()).filter(Boolean);
-      if (cols.length >= 2) {
-        if (hasHoursCol) {
-          // 新格式：项目 | 工时 | 工作内容 | 项目进度 | 备注
-          items.push({ id: uid(), project: cols[0]||'', content: cols[2]||'', progress: cols[3]||'开发中', note: cols[4]||'' });
-        } else {
-          // 旧格式：项目 | 工作内容 | 项目进度 | 备注
-          items.push({ id: uid(), project: cols[0]||'', content: cols[1]||'', progress: cols[2]||'开发中', note: cols[3]||'' });
-        }
+    const cols = splitTableRow(line);
+    if (!cols.some(c => c)) continue; // 全空行跳过
+    if (section === 'current') {
+      if (hasHoursCol) {
+        // 新格式：项目 | 工时 | 工作内容 | 项目进度 | 备注
+        items.push({ id: uid(), project: cols[0]||'', content: cols[2]||'', progress: cols[3]||'开发中', note: cols[4]||'' });
+      } else {
+        // 旧格式：项目 | 工作内容 | 项目进度 | 备注
+        items.push({ id: uid(), project: cols[0]||'', content: cols[1]||'', progress: cols[2]||'开发中', note: cols[3]||'' });
       }
-    }
-    if (section === 'next' && line.startsWith('|') && !line.includes('---') && !line.includes('项目')) {
-      const cols = line.split('|').map(s => s.trim()).filter(Boolean);
-      if (cols.length >= 2) {
-        nextItems.push({ id: uid(), project: cols[0]||'', content: cols[1]||'' });
-      }
+    } else {
+      // 下周计划：内容可为空（模板默认生成空内容行，不能丢弃）
+      nextItems.push({ id: uid(), project: cols[0]||'', content: cols[1]||'' });
     }
   }
   return { items, nextItems };
@@ -415,8 +419,8 @@ function renderMarkdown(md) {
       out.push(`<h2>${line.slice(3)}</h2>`);
     } else if (/^\|/.test(line)) {
       if (!inTable) { out.push('<table>'); inTable = true; headerDone = false; }
-      if (/^\|[\s\-|]+$/.test(line)) { headerDone = true; continue; }
-      const cols = line.split('|').map(s => s.trim()).filter(Boolean);
+      if (isTableSeparator(line)) { headerDone = true; continue; }
+      const cols = splitTableRow(line); // 保留空单元格，避免列错位
       const tag = headerDone ? 'td' : 'th';
       out.push(`<tr>${cols.map(c => `<${tag}>${c}</${tag}>`).join('')}</tr>`);
       if (!headerDone) headerDone = true;
@@ -456,11 +460,11 @@ function Modal({ title, onClose, children, width = 'max-w-lg' }) {
 // ─────────────────────────────────────────
 // 工作记录表单
 // ─────────────────────────────────────────
-function WorkRecordForm({ record, date, projects, onSave, onClose }) {
+function WorkRecordForm({ record, date, projects, onSave, onClose, defaultHours }) {
   const [form, setForm] = useState({
     project: record?.project || '',
     content: record?.content || '',
-    hours: record?.hours || 1,
+    hours: record?.hours || defaultHours || 8,
   });
   const [customProject, setCustomProject] = useState('');
   const [showProjects, setShowProjects] = useState(false);
@@ -779,6 +783,7 @@ function WorkbenchPage({ workRecords, setWorkRecords, settings }) {
             record={editRecord}
             date={selectedDate}
             projects={projects}
+            defaultHours={settings?.defaultHours}
             onSave={handleSave}
             onClose={() => { setShowForm(false); setEditRecord(null); }}
           />
@@ -1067,8 +1072,8 @@ function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [
 
       const result = await callAI(settingsCopy, prompt);
 
-      // 保存 AI 原始输出，用于后续修正对比
-      onSave({ ...report, autoAI: false, aiGenerated: result, versions: baseVersions, updatedAt: new Date().toISOString() });
+      // 保存 AI 原始输出，用于后续修正对比（同时带上快照内容，避免 ...report 过期 prop 冲掉第一次保存的编辑内容）
+      onSave({ ...report, ...preParsed, markdown: preMd, autoAI: false, aiGenerated: result, versions: baseVersions, updatedAt: new Date().toISOString() });
 
       setMarkdown(result);
       const parsed = parseMarkdownToReport(result);
@@ -1519,10 +1524,16 @@ function ImportModal({ onClose, onImport, weeklyReports }) {
       return fmt(d);
     }
     if (typeof val === 'string') {
+      // 带年份：如「2025年5月9日」
+      const my = val.match(/(\d{4})年\s*(\d+)月(\d+)/);
+      if (my) return `${my[1]}-${String(my[2]).padStart(2,'0')}-${String(my[3]).padStart(2,'0')}`;
       const m = val.match(/(\d+)月(\d+)/);
       if (m) {
-        const year = new Date().getFullYear();
-        return `${year}-${String(m[1]).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`;
+        // 无年份默认当前年；导入的是历史数据，若结果在未来则回退到上一年
+        let year = new Date().getFullYear();
+        let dateStr = `${year}-${String(m[1]).padStart(2,'0')}-${String(m[2]).padStart(2,'0')}`;
+        if (dateStr > today()) dateStr = `${year - 1}${dateStr.slice(4)}`;
+        return dateStr;
       }
       const d = new Date(val);
       if (!isNaN(d)) return fmt(d);
@@ -1677,7 +1688,13 @@ function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeekl
 
     let newReports;
     if (existing) {
-      newReports = weeklyReports.map(r => (r.weekStart === weekStart && r.weekEnd === weekEnd) ? { ...newReport, id: r.id } : r);
+      // 覆盖时保留版本历史，并把被覆盖的旧内容存为快照
+      newReports = weeklyReports.map(r => {
+        if (!(r.weekStart === weekStart && r.weekEnd === weekEnd)) return r;
+        const snap = { id: uid(), savedAt: new Date().toISOString(), label: '覆盖前', markdown: r.markdown || '', items: r.items || [], nextItems: r.nextItems || [] };
+        const versions = [...(r.versions || []), snap].slice(-20);
+        return { ...newReport, id: r.id, versions };
+      });
     } else {
       newReports = [newReport, ...weeklyReports].sort((a, b) => b.weekStart.localeCompare(a.weekStart));
     }
@@ -1686,7 +1703,8 @@ function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeekl
   };
 
   const handleSaveReport = (updated) => {
-    setWeeklyReports(weeklyReports.map(r => r.id === updated.id ? updated : r));
+    // 函数式更新：AI 生成流程会在 await 前后各保存一次，不能 map 渲染期快照
+    setWeeklyReports(prev => prev.map(r => r.id === updated.id ? updated : r));
   };
 
   const handleDeleteReport = (id) => {
@@ -1718,7 +1736,13 @@ function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeekl
       const generated = generateReportFromRecords(w.weekStart, w.records, w.weekEnd);
       const newReport = { id: uid(), ...generated, weekEnd: w.weekEnd, generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       if (isConflict && conflict === 'overwrite') {
-        newReports = newReports.map(r => r.weekEnd === w.weekEnd ? { ...newReport, id: r.id } : r);
+        // 覆盖时保留版本历史，并把被覆盖的旧内容存为快照
+        newReports = newReports.map(r => {
+          if (r.weekEnd !== w.weekEnd) return r;
+          const snap = { id: uid(), savedAt: new Date().toISOString(), label: '覆盖前', markdown: r.markdown || '', items: r.items || [], nextItems: r.nextItems || [] };
+          const versions = [...(r.versions || []), snap].slice(-20);
+          return { ...newReport, id: r.id, versions };
+        });
       } else {
         newReports.push(newReport);
       }
@@ -1851,6 +1875,7 @@ function WorkDetailPage({ workRecords, setWorkRecords }) {
     list.sort((a, b) => {
       const va = field === 'hours' ? a.hours : a[field];
       const vb = field === 'hours' ? b.hours : b[field];
+      if (va === vb) return 0;
       return dir === 'asc' ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
     });
     return list;
@@ -2516,7 +2541,7 @@ function SettingsPage({ settings, setSettings, currentUser, syncStatus, syncMsg,
               type="number" min="1" max="24" step="0.5"
               className="border border-gray-200 rounded-lg px-3 py-2 text-sm w-24 focus:outline-none focus:ring-2 focus:ring-blue-300"
               value={settings.defaultHours}
-              onChange={e => setSettings({ ...settings, defaultHours: parseFloat(e.target.value) })}
+              onChange={e => { const v = parseFloat(e.target.value); setSettings({ ...settings, defaultHours: isNaN(v) ? '' : v }); }}
             />
           </div>
         </div>
@@ -2906,9 +2931,10 @@ function App() {
     return s;
   }, [settings]);
 
-  const setWorkRecords = (v) => setWorkRecordsRaw(typeof v === 'function' ? v(workRecords) : v);
-  const setWeeklyReports = (v) => setWeeklyReportsRaw(typeof v === 'function' ? v(weeklyReports) : v);
-  const setSettings = (v) => setSettingsRaw(v);
+  // useStorage 已支持函数式更新，直接透传（避免用渲染期快照解包导致的过期状态覆盖）
+  const setWorkRecords = setWorkRecordsRaw;
+  const setWeeklyReports = setWeeklyReportsRaw;
+  const setSettings = setSettingsRaw;
 
   // ── 从 Supabase 加载数据 ──
   const loadData = useCallback(async () => {
@@ -2931,6 +2957,14 @@ function App() {
             const remote = remoteById[p.id] || {};
             return { ...p, ...local, ...remote, apiKey: remote.apiKey || local.apiKey || p.apiKey };
           });
+          // 保留用户自行添加的自定义 provider（id 不在 DEFAULT_PROVIDERS 中），远端与本地合并、远端优先
+          const defaultIds = new Set(DEFAULT_PROVIDERS.map(p => p.id));
+          const customById = {};
+          (prev.llm?.providers || []).forEach(p => { if (!defaultIds.has(p.id)) customById[p.id] = p; });
+          (remote.llm?.providers || []).forEach(p => {
+            if (!defaultIds.has(p.id)) customById[p.id] = { ...(customById[p.id] || {}), ...p, apiKey: p.apiKey || customById[p.id]?.apiKey || '' };
+          });
+          Object.values(customById).forEach(p => mergedProviders.push(p));
           return { ...prev, ...remote, llm: { ...prev.llm, ...remote.llm, providers: mergedProviders } };
         });
       }
