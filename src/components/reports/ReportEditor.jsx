@@ -131,7 +131,8 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
 
       const result = await callAI(settingsCopy, prompt);
 
-      onSave({ ...report, autoAI: false, aiGenerated: result, versions: baseVersions, updatedAt: new Date().toISOString() });
+      // 保存 AI 原始输出，用于后续修正对比（同时带上快照内容，避免 ...report 过期 prop 冲掉第一次保存的编辑内容）
+      onSave({ ...report, ...preParsed, markdown: preMd, autoAI: false, aiGenerated: result, versions: baseVersions, updatedAt: new Date().toISOString() });
 
       setMarkdown(result);
       const parsed = parseMarkdownToReport(result);
@@ -156,9 +157,11 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
   const handleHoursChange = (project, newTotal) => {
     if (!setWorkRecords) return;
     const projRecs = weekRecords.filter(r => r.project === project);
-    const otherDaysHours = projRecs.filter(r => r.date !== report.weekEnd).reduce((s, r) => s + r.hours, 0);
-    const lastDayHours = Math.max(0, Math.round((newTotal - otherDaysHours) * 10) / 10);
     const existing = projRecs.find(r => r.date === report.weekEnd);
+    // 差额落到目标记录上：除该目标记录外的其余记录（含周末同项目其他记录）都计入 otherHours，
+    // 保证调整后该项目本周合计精确等于 newTotal
+    const otherHours = projRecs.filter(r => r.id !== (existing && existing.id)).reduce((s, r) => s + r.hours, 0);
+    const lastDayHours = Math.max(0, Math.round((newTotal - otherHours) * 10) / 10);
     if (existing) {
       setWorkRecords(workRecords.map(r => r.id === existing.id ? { ...r, hours: lastDayHours } : r));
     } else {

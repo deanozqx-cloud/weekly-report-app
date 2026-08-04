@@ -8,8 +8,11 @@ export function useStorage(key, init) {
     } catch { return typeof init === 'function' ? init() : init; }
   });
   const save = useCallback((v) => {
-    setVal(v);
-    localStorage.setItem(key, JSON.stringify(v));
+    setVal(prev => {
+      const next = typeof v === 'function' ? v(prev) : v;
+      try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* 存储不可用时仅保留内存态 */ }
+      return next;
+    });
   }, [key]);
   return [val, save];
 }

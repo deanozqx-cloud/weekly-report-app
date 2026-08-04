@@ -1,11 +1,11 @@
 import { useState, useRef } from 'react';
 import { formatDate } from '../../lib/utils';
 
-export default function WorkRecordForm({ record, date, projects, onSave, onClose }) {
+export default function WorkRecordForm({ record, date, projects, onSave, onClose, defaultHours }) {
   const [form, setForm] = useState({
     project: record?.project || '',
     content: record?.content || '',
-    hours: record?.hours || 1,
+    hours: record?.hours || defaultHours || 8,
   });
   const [showProjects, setShowProjects] = useState(false);
   const projRef = useRef(null);

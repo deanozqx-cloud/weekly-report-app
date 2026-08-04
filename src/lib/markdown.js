@@ -1,22 +1,5 @@
 import { uid, getWeekRange, getCustomRange, getSunday } from './utils';
 
-export function buildReportPrompt(weekStart, records, defaultHours) {
-  const range = getWeekRange(weekStart);
-  const lines = records.map(r => `- 项目「${r.project}」：${r.content}（工时${r.hours}h）`).join('\n');
-  return `你是一个助手，请根据以下本周工作记录生成一份工作周报（Markdown 格式）。
-
-本周时间范围：${range}
-工作记录：
-${lines}
-
-要求：
-1. 生成"本周工作内容"和"下周工作计划"两个部分
-2. 本周工作内容用 Markdown 表格，列为：项目 | 工时 | 工作内容 | 项目进度 | 备注（工时填写实际工时，如"9h"）
-3. 下周工作计划也用表格，列为：项目 | 工作内容
-4. 在最前面加上问候语：您好：\n\n本周(${range})的工作总结具体如下，请查收。
-5. 只输出 Markdown 内容，不要其他说明`;
-}
-
 export function generateReportFromRecords(weekStart, records, weekEnd) {
   weekEnd = weekEnd || getSunday(weekStart);
   const range = getCustomRange(weekStart, weekEnd);
@@ -66,34 +49,48 @@ export function buildMarkdownTable(items, hoursByProject) {
   return md;
 }
 
+// 切分 Markdown 表格行为单元格数组，保留空单元格（不能 filter(Boolean)，否则空列导致后续列错位）
+export function splitTableRow(line) {
+  let s = line.trim();
+  if (s.startsWith('|')) s = s.slice(1);
+  if (s.endsWith('|')) s = s.slice(0, -1);
+  return s.split('|').map(c => c.trim());
+}
+
+// 是否为表头分隔行，如 | --- | :---: |
+export const isTableSeparator = (line) => /^\|?[\s\-:|]+\|?$/.test(line.trim()) && line.includes('-');
+
 export function parseMarkdownToReport(md) {
   const items = [];
   const nextItems = [];
   const lines = md.split('\n');
   let section = '';
   let hasHoursCol = false;
+  let headerSeen = false; // 每个 section 内第一个表格行视为表头（不能用 includes('项目') 判断，项目名含"项目"二字的数据行会被误判）
   for (const line of lines) {
-    if (line.includes('本周工作内容')) { section = 'current'; continue; }
-    if (line.includes('下周工作计划')) { section = 'next'; continue; }
-    if (section === 'current' && line.startsWith('|') && line.includes('项目')) {
-      hasHoursCol = line.includes('工时');
+    if (line.includes('本周工作内容')) { section = 'current'; headerSeen = false; continue; }
+    if (line.includes('下周工作计划')) { section = 'next'; headerSeen = false; continue; }
+    if (!section || !line.trim().startsWith('|')) continue;
+    if (isTableSeparator(line)) continue;
+    if (!headerSeen) {
+      // 表头行：本周表检测是否含工时列
+      if (section === 'current') hasHoursCol = line.includes('工时');
+      headerSeen = true;
       continue;
     }
-    if (section === 'current' && line.startsWith('|') && !line.includes('---')) {
-      const cols = line.split('|').map(s => s.trim()).filter(Boolean);
-      if (cols.length >= 2) {
-        if (hasHoursCol) {
-          items.push({ id: uid(), project: cols[0]||'', content: cols[2]||'', progress: cols[3]||'开发中', note: cols[4]||'' });
-        } else {
-          items.push({ id: uid(), project: cols[0]||'', content: cols[1]||'', progress: cols[2]||'开发中', note: cols[3]||'' });
-        }
+    const cols = splitTableRow(line);
+    if (!cols.some(c => c)) continue; // 全空行跳过
+    if (section === 'current') {
+      if (hasHoursCol) {
+        // 新格式：项目 | 工时 | 工作内容 | 项目进度 | 备注
+        items.push({ id: uid(), project: cols[0]||'', content: cols[2]||'', progress: cols[3]||'开发中', note: cols[4]||'' });
+      } else {
+        // 旧格式：项目 | 工作内容 | 项目进度 | 备注
+        items.push({ id: uid(), project: cols[0]||'', content: cols[1]||'', progress: cols[2]||'开发中', note: cols[3]||'' });
       }
-    }
-    if (section === 'next' && line.startsWith('|') && !line.includes('---') && !line.includes('项目')) {
-      const cols = line.split('|').map(s => s.trim()).filter(Boolean);
-      if (cols.length >= 2) {
-        nextItems.push({ id: uid(), project: cols[0]||'', content: cols[1]||'' });
-      }
+    } else {
+      // 下周计划：内容可为空（模板默认生成空内容行，不能丢弃）
+      nextItems.push({ id: uid(), project: cols[0]||'', content: cols[1]||'' });
     }
   }
   return { items, nextItems };
@@ -128,8 +125,8 @@ export function renderMarkdown(md) {
       out.push(`<h2>${line.slice(3)}</h2>`);
     } else if (/^\|/.test(line)) {
       if (!inTable) { out.push('<table>'); inTable = true; headerDone = false; }
-      if (/^\|[\s\-|]+$/.test(line)) { headerDone = true; continue; }
-      const cols = line.split('|').map(s => s.trim()).filter(Boolean);
+      if (isTableSeparator(line)) { headerDone = true; continue; }
+      const cols = splitTableRow(line); // 保留空单元格，避免列错位
       const tag = headerDone ? 'td' : 'th';
       out.push(`<tr>${cols.map(c => `<${tag}>${c}</${tag}>`).join('')}</tr>`);
       if (!headerDone) headerDone = true;
