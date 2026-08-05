@@ -112,11 +112,18 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       const hoursLines = Object.entries(aiHoursByProject).map(([p, h]) => `- 项目「${p}」：${h}h`).join('\n');
       if (hoursLines) prompt += `【本周各项目工时汇总】\n${hoursLines}\n\n`;
 
+      // 汇总页人工维护的项目进度：优先级最高，AI 必须原样采用；未维护的项目才由 AI 根据工作内容判断
+      const maintained = settings?.projectStatuses || {};
+      const weekProjects = [...new Set(weekRecords.map(r => r.project))];
+      const statusLines = weekProjects.filter(p => maintained[p]).map(p => `- 项目「${p}」：${maintained[p]}`).join('\n');
+      if (statusLines) prompt += `【项目进度（人工维护，必须原样填入"项目进度"列，不要改写）】\n${statusLines}\n\n`;
+
       prompt += `要求：
 1. 开头加上：您好：\n\n本周(${report.range})的工作总结具体如下，请查收。
 2. 生成"本周工作内容"表格，列：项目 | 工时 | 工作内容 | 项目进度 | 备注（工时填写实际工时，如"9h"）
-3. 生成"下周工作计划"表格，列：项目 | 工作内容（根据本周进展合理推测，用户会自行修改）
-4. 只输出Markdown内容，不要其他说明`;
+3. "项目进度"列：上方【项目进度（人工维护）】中给出的项目必须原样使用给定值；未给出的项目根据本周工作内容判断（如：需求中/开发中/测试中/已上线/已完成）
+4. 生成"下周工作计划"表格，列：项目 | 工作内容（根据本周进展合理推测，用户会自行修改）
+5. 只输出Markdown内容，不要其他说明`;
 
       const settingsCopy = { ...settings, llm: { ...settings.llm, default: providerOverride || selectedProvider } };
 

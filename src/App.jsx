@@ -200,7 +200,7 @@ export default function App() {
               <WorkDetailPage workRecords={workRecords} setWorkRecords={setWorkRecords} />
             )}
             {activePage === 'summary' && (
-              <ProjectSummaryPage workRecords={workRecords} weeklyReports={weeklyReports} settings={mergedSettings} setSettings={setSettings} />
+              <ProjectSummaryPage workRecords={workRecords} setWorkRecords={setWorkRecords} weeklyReports={weeklyReports} settings={mergedSettings} setSettings={setSettings} />
             )}
             {activePage === 'settings' && (
               <SettingsPage

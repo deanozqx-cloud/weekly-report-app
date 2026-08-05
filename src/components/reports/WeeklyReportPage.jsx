@@ -22,7 +22,7 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
     const records = workRecords.filter(r => r.date >= weekStart && r.date <= weekEnd);
     const existing = weeklyReports.find(r => r.weekStart === weekStart && r.weekEnd === weekEnd);
 
-    const generated = generateReportFromRecords(weekStart, records, weekEnd);
+    const generated = generateReportFromRecords(weekStart, records, weekEnd, settings?.projectStatuses);
     const newReport = { id: uid(), ...generated, weekEnd, autoAI: true, autoAIProvider: aiProvider || '', generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
 
     let newReports;
@@ -70,7 +70,7 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
         newWorkRecords.push({ id: uid(), date: rec.date, project: rec.project, content: rec.content, hours: rec.hours, createdAt: new Date().toISOString() });
       });
 
-      const generated = generateReportFromRecords(w.weekStart, w.records, w.weekEnd);
+      const generated = generateReportFromRecords(w.weekStart, w.records, w.weekEnd, settings?.projectStatuses);
       const newReport = { id: uid(), ...generated, weekEnd: w.weekEnd, generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       if (isConflict && conflict === 'overwrite') {
         // 覆盖时保留版本历史，并把被覆盖的旧内容存为快照
