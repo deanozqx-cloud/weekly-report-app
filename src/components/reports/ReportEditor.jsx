@@ -384,7 +384,11 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
                     <EditableSelect
                       value={it.progress || '开发中'}
                       options={settings.progressOptions || DEFAULT_PROGRESS_OPTIONS}
-                      onChange={v => updateItem(it.id, 'progress', v)}
+                      onChange={v => {
+                        updateItem(it.id, 'progress', v);
+                        // 与汇总页的项目进度双向同步：这里改了，汇总页与后续生成的报告一并生效
+                        if (it.project) setSettings(prev => ({ ...prev, projectStatuses: { ...(prev.projectStatuses || {}), [it.project]: v } }));
+                      }}
                       onAddOption={v => setSettings(prev => ({ ...prev, progressOptions: [...(prev.progressOptions || DEFAULT_PROGRESS_OPTIONS), v] }))}
                     />
                     <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.note||''} onChange={e => updateItem(it.id, 'note', e.target.value)} placeholder="备注" />
