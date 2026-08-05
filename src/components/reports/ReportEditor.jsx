@@ -2,13 +2,13 @@ import { useState, useEffect, useMemo } from 'react';
 import { DEFAULT_PROVIDERS, DEFAULT_PROGRESS_OPTIONS } from '../../lib/constants';
 import { uid } from '../../lib/utils';
 import { callAI, distillStyleRules, refineReport } from '../../lib/ai';
-import { qualityBlock, buildMonthlyPrompt } from '../../lib/prompts';
+import { qualityBlock, buildLongReportPrompt, pickChildReports, isLongType, LONG_TYPES } from '../../lib/prompts';
 import { buildMarkdown, parseMarkdownToReport, renderMarkdown } from '../../lib/markdown';
 import EditableSelect from '../ui/EditableSelect';
 
 export default function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [], workRecords = [], setWorkRecords }) {
-  // 月报等长周期报告：只用 Markdown 模式编辑（结构化表格是周报专属）
-  const isLong = report.type === 'monthly';
+  // 长周期报告（月报/季报/半年报/年报）：只用 Markdown 模式编辑（结构化表格是周报专属）
+  const isLong = isLongType(report.type);
   const [items, setItems] = useState(report.items || []);
   const [nextItems, setNextItems] = useState(report.nextItems || []);
   const [markdown, setMarkdown] = useState(report.markdown || '');
@@ -28,7 +28,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     setItems(report.items || []);
     setNextItems(report.nextItems || []);
     setMarkdown(report.markdown || '');
-    setMdMode(report.type === 'monthly');
+    setMdMode(isLongType(report.type));
   }, [report.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const weekRecords = useMemo(() => workRecords.filter(r => r.date >= report.weekStart && r.date <= report.weekEnd), [workRecords, report.weekStart, report.weekEnd]);
@@ -72,17 +72,16 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       let prompt;
 
       if (isLong) {
-        // 月报：分层汇总——以该月各周报（用户已审校）为主要输入
-        const year = parseInt(report.weekStart.slice(0, 4));
-        const month = parseInt(report.weekStart.slice(5, 7));
-        const weeklyInPeriod = weeklyReports
-          .filter(r => (r.type || 'weekly') === 'weekly' && r.markdown && r.weekStart <= report.weekEnd && r.weekEnd >= report.weekStart)
-          .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
-        const monthMilestones = (settings?.milestones || []).filter(m => m.date >= report.weekStart && m.date <= report.weekEnd);
-        prompt = buildMonthlyPrompt({
-          year, month, weeklyInPeriod,
+        // 长周期报告：分层汇总——优先以期间内下一级已审校的报告为输入（季报吃月报、年报吃季报/月报）
+        const { tierLabel, reports: childReports } = pickChildReports(weeklyReports, report.type, report.weekStart, report.weekEnd);
+        const periodMilestones = (settings?.milestones || []).filter(m => m.date >= report.weekStart && m.date <= report.weekEnd);
+        prompt = buildLongReportPrompt({
+          type: report.type,
+          label: report.range,
+          childReports,
+          childTierLabel: tierLabel,
           records: weekRecords,
-          milestones: monthMilestones,
+          milestones: periodMilestones,
           profiles: settings?.projectProfiles || {},
           statuses: settings?.projectStatuses || {},
           styleRules,
@@ -257,7 +256,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
         {/* 行1：标题 + 保存 */}
         <div className="flex items-center justify-between px-5 pt-3 pb-2">
           <div>
-            <h3 className="font-semibold text-gray-800">{isLong ? `${report.range} 月报` : `第 ${report.range} 周`}</h3>
+            <h3 className="font-semibold text-gray-800">{isLong ? `${report.range} ${LONG_TYPES[report.type]?.name || ''}` : `第 ${report.range} 周`}</h3>
             <span className="text-xs text-gray-400">{report.weekStart} ～ {report.weekEnd}</span>
           </div>
           <div className="flex items-center gap-2">
