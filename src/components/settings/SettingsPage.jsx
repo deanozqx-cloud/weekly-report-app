@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { DEFAULT_PROVIDERS, DEFAULT_PROGRESS_OPTIONS } from '../../lib/constants';
+import { DEFAULT_PROVIDERS } from '../../lib/constants';
 import { uid } from '../../lib/utils';
 import { callAI } from '../../lib/ai';
 import SbUserSection from './SbUserSection';
@@ -12,6 +12,18 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
   const [testing, setTesting] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [newRule, setNewRule] = useState('');
+
+  const styleRules = settings.styleRules || [];
+  const addRule = () => {
+    const v = newRule.trim();
+    if (!v) return;
+    setSettings(prev => ({ ...prev, styleRules: [...(prev.styleRules || []), v].slice(0, 10) }));
+    setNewRule('');
+  };
+  const removeRule = (idx) => {
+    setSettings(prev => ({ ...prev, styleRules: (prev.styleRules || []).filter((_, i) => i !== idx) }));
+  };
 
   const activeCfg = providers.find(p => p.id === activeId);
 
@@ -199,6 +211,46 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
           <p className="font-medium">启用设置云同步（防止 API Key 丢失）</p>
           <p>在 Supabase 控制台 → SQL Editor 中执行以下命令，即可将 API Key 等设置同步到云端：</p>
           <code className="block bg-amber-100 rounded px-2 py-1 font-mono select-all">ALTER TABLE user_data ADD COLUMN IF NOT EXISTS settings JSONB;</code>
+        </div>
+
+        {/* ── AI 写作规则（风格画像） ── */}
+        <div>
+          <h3 className="font-medium text-gray-700 mb-1">AI 写作规则</h3>
+          <p className="text-xs text-gray-400 mb-3">
+            保存修改过的 AI 周报时会自动从你的改动中提炼规则，生成时注入 AI；也可以手动添加。最多 10 条。
+          </p>
+          <div className="space-y-2">
+            {styleRules.length === 0 ? (
+              <p className="text-sm text-gray-300 bg-gray-50 rounded-lg px-3 py-3 text-center">
+                暂无规则——修改并保存一份 AI 生成的周报后自动出现
+              </p>
+            ) : styleRules.map((r, idx) => (
+              <div key={idx} className="group flex items-start gap-2 bg-gray-50 rounded-lg px-3 py-2 text-sm text-gray-700">
+                <span className="text-gray-300 shrink-0">{idx + 1}.</span>
+                <span className="flex-1">{r}</span>
+                <button
+                  onClick={() => removeRule(idx)}
+                  className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 text-lg leading-none shrink-0 transition-opacity"
+                >&times;</button>
+              </div>
+            ))}
+            <div className="flex gap-2">
+              <input
+                className="flex-1 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 min-w-0"
+                placeholder="手动添加规则，如：工作内容用「动词+对象+结果」句式"
+                value={newRule}
+                onChange={e => setNewRule(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') addRule(); }}
+              />
+              <button onClick={addRule} className="px-4 py-2 text-sm border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50 shrink-0">添加</button>
+              {styleRules.length > 0 && (
+                <button
+                  onClick={() => { if (window.confirm('清空全部写作规则？')) setSettings(prev => ({ ...prev, styleRules: [] })); }}
+                  className="px-3 py-2 text-sm text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg shrink-0"
+                >清空</button>
+              )}
+            </div>
+          </div>
         </div>
 
         {/* ── 默认工时 ── */}

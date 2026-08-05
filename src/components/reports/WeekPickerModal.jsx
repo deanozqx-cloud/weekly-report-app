@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { DEFAULT_PROVIDERS } from '../../lib/constants';
-import { today, getMonday, getSunday, addDays, formatDate, getCustomRange } from '../../lib/utils';
+import { today, getMonday, getSunday, addDays, formatDate } from '../../lib/utils';
 import Modal from '../ui/Modal';
 
 export default function WeekPickerModal({ onConfirm, onClose, workRecords, weeklyReports, settings }) {
@@ -15,7 +15,7 @@ export default function WeekPickerModal({ onConfirm, onClose, workRecords, weekl
 
   const records = isValid ? workRecords.filter(r => r.date >= startDate && r.date <= endDate) : [];
   const totalHours = records.reduce((s, r) => s + r.hours, 0);
-  const existing = weeklyReports.find(r => r.weekStart === startDate && r.weekEnd === endDate);
+  const existing = weeklyReports.find(r => (r.type || 'weekly') === 'weekly' && r.weekStart === startDate && r.weekEnd === endDate);
 
   const spanDays = isValid ? Math.round((new Date(endDate) - new Date(startDate)) / 86400000) : 6;
   const shiftBack = () => {

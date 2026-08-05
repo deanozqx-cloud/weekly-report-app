@@ -61,4 +61,10 @@ export const defaultSettings = {
   progressOptions: DEFAULT_PROGRESS_OPTIONS,
   statusOptions: DEFAULT_STATUS_OPTIONS,
   projectStatuses: {},
+  // AI 从用户历史修改中提炼的写作规则（风格画像），生成时注入 prompt
+  styleRules: [],
+  // 项目档案：{ [项目名]: { goal, background, milestonePlan } }
+  projectProfiles: {},
+  // 里程碑/关键成果记录：[{ id, date, project, title, metric }]
+  milestones: [],
 };

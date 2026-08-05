@@ -90,7 +90,12 @@ export default function ProjectSummaryPage({ workRecords, setWorkRecords, weekly
       const statuses = { ...(prev.projectStatuses || {}) };
       if (statuses[oldName] != null && statuses[newName] == null) statuses[newName] = statuses[oldName];
       delete statuses[oldName];
-      return { ...prev, projectStatuses: statuses };
+      // 项目档案与里程碑一并迁移到新名称
+      const profiles = { ...(prev.projectProfiles || {}) };
+      if (profiles[oldName] != null && profiles[newName] == null) profiles[newName] = profiles[oldName];
+      delete profiles[oldName];
+      const milestones = (prev.milestones || []).map(m => m.project === oldName ? { ...m, project: newName } : m);
+      return { ...prev, projectStatuses: statuses, projectProfiles: profiles, milestones };
     });
     setCheckedProjects(prev => { const next = new Set(prev); next.delete(oldName); return next; });
     if (filterProject === oldName) setFilterProject('');
@@ -233,6 +238,8 @@ export default function ProjectSummaryPage({ workRecords, setWorkRecords, weekly
           weeklyReports={weeklyReports}
           startDate={startDate}
           endDate={endDate}
+          settings={settings}
+          setSettings={setSettings}
           onClose={() => setSelectedProject(null)}
         />
       )}

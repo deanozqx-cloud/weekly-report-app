@@ -1,17 +1,21 @@
 import { useState, useEffect, useMemo } from 'react';
 import { DEFAULT_PROVIDERS, DEFAULT_PROGRESS_OPTIONS } from '../../lib/constants';
 import { uid } from '../../lib/utils';
-import { callAI } from '../../lib/ai';
-import { buildMarkdown, buildMarkdownTable, parseMarkdownToReport, renderMarkdown } from '../../lib/markdown';
+import { callAI, distillStyleRules, refineReport } from '../../lib/ai';
+import { qualityBlock, buildMonthlyPrompt } from '../../lib/prompts';
+import { buildMarkdown, parseMarkdownToReport, renderMarkdown } from '../../lib/markdown';
 import EditableSelect from '../ui/EditableSelect';
 
 export default function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [], workRecords = [], setWorkRecords }) {
+  // 月报等长周期报告：只用 Markdown 模式编辑（结构化表格是周报专属）
+  const isLong = report.type === 'monthly';
   const [items, setItems] = useState(report.items || []);
   const [nextItems, setNextItems] = useState(report.nextItems || []);
   const [markdown, setMarkdown] = useState(report.markdown || '');
-  const [mdMode, setMdMode] = useState(false);
+  const [mdMode, setMdMode] = useState(isLong);
   const [mdPreview, setMdPreview] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
+  const [refining, setRefining] = useState(false);
   const [aiError, setAiError] = useState('');
   const [copied, setCopied] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -24,7 +28,8 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     setItems(report.items || []);
     setNextItems(report.nextItems || []);
     setMarkdown(report.markdown || '');
-  }, [report.id]);
+    setMdMode(report.type === 'monthly');
+  }, [report.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const weekRecords = useMemo(() => workRecords.filter(r => r.date >= report.weekStart && r.date <= report.weekEnd), [workRecords, report.weekStart, report.weekEnd]);
   const hoursByProject = useMemo(() => {
@@ -39,9 +44,17 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     const parsed = mdMode ? parseMarkdownToReport(markdown) : { items, nextItems };
     const ver = { id: uid(), savedAt: new Date().toISOString(), label: '手动保存', markdown: md, items: parsed.items, nextItems: parsed.nextItems };
     const versions = [...(report.versions || []), ver].slice(-20);
-    onSave({ ...report, ...parsed, markdown: md, versions, updatedAt: new Date().toISOString() });
+    // 风格画像：用户改过 AI 稿时后台提炼写作规则（同一份修改稿只提炼一次，失败静默）
+    const shouldDistill = !!(report.aiGenerated && md !== report.aiGenerated && md !== report.styleDistilledMd);
+    onSave({ ...report, ...parsed, markdown: md, versions, styleDistilledMd: shouldDistill ? md : report.styleDistilledMd, updatedAt: new Date().toISOString() });
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
+    if (shouldDistill) {
+      const settingsCopy = { ...settings, llm: { ...settings.llm, default: selectedProvider } };
+      distillStyleRules(settingsCopy, report.aiGenerated, md, settings?.styleRules || [])
+        .then(rules => setSettings(prev => ({ ...prev, styleRules: rules })))
+        .catch(() => {});
+    }
   };
 
   const handleCopy = () => {
@@ -55,75 +68,100 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     setAiError('');
     setAiLoading(true);
     try {
-      const pastReports = weeklyReports
-        .filter(r => r.id !== report.id && r.markdown)
-        .sort((a, b) => b.weekStart.localeCompare(a.weekStart));
+      const styleRules = settings?.styleRules || [];
+      let prompt;
 
-      const styleExamples = pastReports.slice(0, 2);
-
-      const corrections = pastReports
-        .filter(r => r.aiGenerated && r.aiGenerated !== r.markdown)
-        .slice(0, 3);
-
-      const lastReport = pastReports[0];
-
-      let prompt = `你是工作周报助手。请根据本周工作记录生成一份专业的中文工作周报。\n\n`;
-
-      if (styleExamples.length > 0) {
-        prompt += `【公司周报风格参考 - 请严格模仿以下示例的措辞和表述习惯】\n`;
-        styleExamples.forEach((r, i) => {
-          prompt += `\n=== 示例${i + 1}（${r.range}周）===\n${r.markdown}\n`;
+      if (isLong) {
+        // 月报：分层汇总——以该月各周报（用户已审校）为主要输入
+        const year = parseInt(report.weekStart.slice(0, 4));
+        const month = parseInt(report.weekStart.slice(5, 7));
+        const weeklyInPeriod = weeklyReports
+          .filter(r => (r.type || 'weekly') === 'weekly' && r.markdown && r.weekStart <= report.weekEnd && r.weekEnd >= report.weekStart)
+          .sort((a, b) => a.weekStart.localeCompare(b.weekStart));
+        const monthMilestones = (settings?.milestones || []).filter(m => m.date >= report.weekStart && m.date <= report.weekEnd);
+        prompt = buildMonthlyPrompt({
+          year, month, weeklyInPeriod,
+          records: weekRecords,
+          milestones: monthMilestones,
+          profiles: settings?.projectProfiles || {},
+          statuses: settings?.projectStatuses || {},
+          styleRules,
         });
-        prompt += `\n`;
-      }
+      } else {
+        const pastReports = weeklyReports
+          .filter(r => r.id !== report.id && (r.type || 'weekly') === 'weekly' && r.markdown)
+          .sort((a, b) => b.weekStart.localeCompare(a.weekStart));
 
-      if (corrections.length > 0) {
-        prompt += `【历史修正记录 - 以下是AI生成后用户修改的内容，请学习用户偏好避免重犯】\n`;
-        corrections.forEach((r, i) => {
-          prompt += `\n修正${i + 1}（${r.range}周）：\nAI生成：\n${r.aiGenerated}\n用户修改为：\n${r.markdown}\n`;
-        });
-        prompt += `\n`;
-      }
+        const styleExamples = pastReports.slice(0, 2);
+        const lastReport = pastReports[0];
 
-      if (lastReport) {
-        prompt += `【上周项目状态参考 - 帮助你理解各项目当前所处阶段】\n`;
-        (lastReport.items || []).forEach(it => {
-          prompt += `- 项目「${it.project}」上周状态：${it.progress}，内容：${it.content}\n`;
-        });
-        prompt += `\n`;
-      }
+        prompt = `你是工作周报助手。请根据本周工作记录生成一份专业的中文工作周报。\n\n`;
 
-      const dailyLines = weekRecords
-        .slice().sort((a, b) => a.date.localeCompare(b.date) || a.project.localeCompare(b.project))
-        .map(r => `- ${r.date} 项目「${r.project}」：${r.content}（${r.hours}h）`)
-        .join('\n');
-      prompt += `【本周每日工作明细（主要输入，请以此为准整理周报）】\n`;
-      prompt += dailyLines || '（本周无工作记录）';
-      prompt += `\n\n`;
+        if (styleExamples.length > 0) {
+          prompt += `【公司周报风格参考 - 请严格模仿以下示例的措辞和表述习惯】\n`;
+          styleExamples.forEach((r, i) => {
+            prompt += `\n=== 示例${i + 1}（${r.range}周）===\n${r.markdown}\n`;
+          });
+          prompt += `\n`;
+        }
 
-      if (items.length > 0) {
-        prompt += `【当前周报草稿（供参考）】\n`;
-        prompt += items.map(it => `- 项目「${it.project}」：${it.content}，进度：${it.progress}`).join('\n');
+        // 风格画像已沉淀为规则时注入规则（见 qualityBlock）；冷启动无规则时退回注入最近的修正对比原文
+        if (!styleRules.length) {
+          const corrections = pastReports
+            .filter(r => r.aiGenerated && r.aiGenerated !== r.markdown)
+            .slice(0, 3);
+          if (corrections.length > 0) {
+            prompt += `【历史修正记录 - 以下是AI生成后用户修改的内容，请学习用户偏好避免重犯】\n`;
+            corrections.forEach((r, i) => {
+              prompt += `\n修正${i + 1}（${r.range}周）：\nAI生成：\n${r.aiGenerated}\n用户修改为：\n${r.markdown}\n`;
+            });
+            prompt += `\n`;
+          }
+        }
+
+        if (lastReport) {
+          prompt += `【上周项目状态参考 - 帮助你理解各项目当前所处阶段】\n`;
+          (lastReport.items || []).forEach(it => {
+            prompt += `- 项目「${it.project}」上周状态：${it.progress}，内容：${it.content}\n`;
+          });
+          prompt += `\n`;
+        }
+
+        const dailyLines = weekRecords
+          .slice().sort((a, b) => a.date.localeCompare(b.date) || a.project.localeCompare(b.project))
+          .map(r => `- ${r.date} 项目「${r.project}」：${r.content}${r.outcome ? `（成果：${r.outcome}）` : ''}（${r.hours}h）`)
+          .join('\n');
+        prompt += `【本周每日工作明细（主要输入，请以此为准整理周报）】\n`;
+        prompt += dailyLines || '（本周无工作记录）';
         prompt += `\n\n`;
-      }
 
-      const aiHoursByProject = {};
-      weekRecords.forEach(r => { aiHoursByProject[r.project] = (aiHoursByProject[r.project] || 0) + r.hours; });
-      const hoursLines = Object.entries(aiHoursByProject).map(([p, h]) => `- 项目「${p}」：${h}h`).join('\n');
-      if (hoursLines) prompt += `【本周各项目工时汇总】\n${hoursLines}\n\n`;
+        if (items.length > 0) {
+          prompt += `【当前周报草稿（供参考）】\n`;
+          prompt += items.map(it => `- 项目「${it.project}」：${it.content}，进度：${it.progress}`).join('\n');
+          prompt += `\n\n`;
+        }
 
-      // 汇总页人工维护的项目进度：优先级最高，AI 必须原样采用；未维护的项目才由 AI 根据工作内容判断
-      const maintained = settings?.projectStatuses || {};
-      const weekProjects = [...new Set(weekRecords.map(r => r.project))];
-      const statusLines = weekProjects.filter(p => maintained[p]).map(p => `- 项目「${p}」：${maintained[p]}`).join('\n');
-      if (statusLines) prompt += `【项目进度（人工维护，必须原样填入"项目进度"列，不要改写）】\n${statusLines}\n\n`;
+        const aiHoursByProject = {};
+        weekRecords.forEach(r => { aiHoursByProject[r.project] = (aiHoursByProject[r.project] || 0) + r.hours; });
+        const hoursLines = Object.entries(aiHoursByProject).map(([p, h]) => `- 项目「${p}」：${h}h`).join('\n');
+        if (hoursLines) prompt += `【本周各项目工时汇总】\n${hoursLines}\n\n`;
 
-      prompt += `要求：
+        // 汇总页人工维护的项目进度：优先级最高，AI 必须原样采用；未维护的项目才由 AI 根据工作内容判断
+        const maintained = settings?.projectStatuses || {};
+        const weekProjects = [...new Set(weekRecords.map(r => r.project))];
+        const statusLines = weekProjects.filter(p => maintained[p]).map(p => `- 项目「${p}」：${maintained[p]}`).join('\n');
+        if (statusLines) prompt += `【项目进度（人工维护，必须原样填入"项目进度"列，不要改写）】\n${statusLines}\n\n`;
+
+        prompt += qualityBlock(styleRules);
+
+        prompt += `
+要求：
 1. 开头加上：您好：\n\n本周(${report.range})的工作总结具体如下，请查收。
 2. 生成"本周工作内容"表格，列：项目 | 工时 | 工作内容 | 项目进度 | 备注（工时填写实际工时，如"9h"）
 3. "项目进度"列：上方【项目进度（人工维护）】中给出的项目必须原样使用给定值；未给出的项目根据本周工作内容判断（如：需求中/开发中/测试中/已上线/已完成）
 4. 生成"下周工作计划"表格，列：项目 | 工作内容（根据本周进展合理推测，用户会自行修改）
 5. 只输出Markdown内容，不要其他说明`;
+      }
 
       const settingsCopy = { ...settings, llm: { ...settings.llm, default: providerOverride || selectedProvider } };
 
@@ -150,6 +188,35 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       setAiError(e.message);
     } finally {
       setAiLoading(false);
+    }
+  };
+
+  // AI 精修：对当前内容做一轮审稿（删套话、改具体），精修前自动快照
+  const handleRefine = async () => {
+    const cur = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject);
+    if (!cur.trim()) { setAiError('当前没有可精修的内容'); return; }
+    setAiError('');
+    setRefining(true);
+    try {
+      const preParsed = mdMode ? parseMarkdownToReport(markdown) : { items, nextItems };
+      const ver = { id: uid(), savedAt: new Date().toISOString(), label: '精修前', markdown: cur, items: preParsed.items, nextItems: preParsed.nextItems };
+      const baseVersions = [...(report.versions || []), ver].slice(-20);
+      onSave({ ...report, ...preParsed, markdown: cur, versions: baseVersions, updatedAt: new Date().toISOString() });
+
+      const settingsCopy = { ...settings, llm: { ...settings.llm, default: selectedProvider } };
+      const result = await refineReport(settingsCopy, cur, settings?.styleRules || []);
+
+      setMarkdown(result);
+      if (!isLong) {
+        const parsed = parseMarkdownToReport(result);
+        if (parsed.items.length) setItems(parsed.items);
+        if (parsed.nextItems.length) setNextItems(parsed.nextItems);
+      }
+      setMdMode(true);
+    } catch (e) {
+      setAiError(e.message);
+    } finally {
+      setRefining(false);
     }
   };
 
@@ -190,7 +257,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
         {/* 行1：标题 + 保存 */}
         <div className="flex items-center justify-between px-5 pt-3 pb-2">
           <div>
-            <h3 className="font-semibold text-gray-800">第 {report.range} 周</h3>
+            <h3 className="font-semibold text-gray-800">{isLong ? `${report.range} 月报` : `第 ${report.range} 周`}</h3>
             <span className="text-xs text-gray-400">{report.weekStart} ～ {report.weekEnd}</span>
           </div>
           <div className="flex items-center gap-2">
@@ -219,16 +286,27 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
             <span className="text-gray-300 mx-1 select-none">|</span>
             <button
               onClick={() => handleAiGen()}
-              disabled={aiLoading}
+              disabled={aiLoading || refining}
               className="text-xs text-blue-600 hover:text-blue-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
             >
               {aiLoading ? '生成中...' : 'AI 重新生成'}
             </button>
+            <span className="text-gray-300 mx-1 select-none">|</span>
+            <button
+              onClick={handleRefine}
+              disabled={aiLoading || refining}
+              title="AI 逐行审稿：删除套话、把模糊表述改具体，不改事实"
+              className="text-xs text-indigo-600 hover:text-indigo-700 font-medium disabled:opacity-50 disabled:cursor-not-allowed whitespace-nowrap"
+            >
+              {refining ? '精修中...' : 'AI 精修'}
+            </button>
           </div>
-          <div className="flex bg-gray-50 border border-gray-200 rounded-lg overflow-hidden text-xs h-8">
-            <button onClick={() => { setMdMode(false); setMdPreview(false); }} className={`px-3 h-full transition-colors ${!mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>结构化</button>
-            <button onClick={() => { if (!mdMode) setMarkdown(buildMarkdown({ ...report, items, nextItems }, hoursByProject)); setMdMode(true); }} className={`px-3 h-full transition-colors ${mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Markdown</button>
-          </div>
+          {!isLong && (
+            <div className="flex bg-gray-50 border border-gray-200 rounded-lg overflow-hidden text-xs h-8">
+              <button onClick={() => { setMdMode(false); setMdPreview(false); }} className={`px-3 h-full transition-colors ${!mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>结构化</button>
+              <button onClick={() => { if (!mdMode) setMarkdown(buildMarkdown({ ...report, items, nextItems }, hoursByProject)); setMdMode(true); }} className={`px-3 h-full transition-colors ${mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Markdown</button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -362,7 +440,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
                       setItems(previewVersion.items || []);
                       setNextItems(previewVersion.nextItems || []);
                       setMarkdown(previewVersion.markdown || '');
-                      setMdMode(false);
+                      setMdMode(isLong);
                       setShowVersions(false);
                       setPreviewVersion(null);
                     }}
@@ -375,7 +453,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
               </div>
             ) : (
               <div className="flex-1 overflow-y-auto">
-                {[...(report.versions || [])].reverse().map((v, i) => (
+                {[...(report.versions || [])].reverse().map((v) => (
                   <div key={v.id} className="px-4 py-3 border-b border-gray-50 hover:bg-gray-50 cursor-pointer" onClick={() => setPreviewVersion(v)}>
                     <div className="flex items-center justify-between gap-2">
                       <span className={`text-xs font-medium px-1.5 py-0.5 rounded ${v.label === 'AI生成前' ? 'bg-orange-50 text-orange-600' : 'bg-blue-50 text-blue-600'}`}>{v.label}</span>

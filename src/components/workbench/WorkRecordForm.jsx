@@ -5,6 +5,7 @@ export default function WorkRecordForm({ record, date, projects, onSave, onClose
   const [form, setForm] = useState({
     project: record?.project || '',
     content: record?.content || '',
+    outcome: record?.outcome || '',
     hours: record?.hours || defaultHours || 8,
   });
   const [showProjects, setShowProjects] = useState(false);
@@ -52,6 +53,18 @@ export default function WorkRecordForm({ record, date, projects, onSave, onClose
           placeholder="描述今天完成的工作..."
           value={form.content}
           onChange={e => setForm({...form, content: e.target.value})}
+        />
+      </div>
+
+      {/* 成果/产出（可选） */}
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-1">成果/产出 <span className="text-gray-400 font-normal">(可选，AI 生成周报时会重点引用)</span></label>
+        <textarea
+          className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+          rows={2}
+          placeholder="量化结果或交付物，如：列表页上线，首屏耗时降低40%"
+          value={form.outcome}
+          onChange={e => setForm({...form, outcome: e.target.value})}
         />
       </div>
 

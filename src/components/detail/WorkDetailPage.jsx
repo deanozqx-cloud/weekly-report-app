@@ -97,7 +97,10 @@ export default function WorkDetailPage({ workRecords, setWorkRecords }) {
                 <tr key={rec.id} className={`border-t border-gray-50 hover:bg-blue-50 group ${idx % 2 === 0 ? '' : 'bg-gray-50'}`}>
                   <td className="px-4 py-3 text-gray-500 whitespace-nowrap">{rec.date}</td>
                   <td className="px-4 py-3 font-medium text-gray-700 whitespace-nowrap">{rec.project}</td>
-                  <td className="px-4 py-3 text-gray-600">{rec.content}</td>
+                  <td className="px-4 py-3 text-gray-600">
+                    {rec.content}
+                    {rec.outcome && <div className="text-xs text-emerald-600 mt-0.5">🏆 {rec.outcome}</div>}
+                  </td>
                   <td className="px-4 py-3 text-right font-medium text-blue-600 whitespace-nowrap">{rec.hours}h</td>
                   <td className="px-4 py-3">
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 justify-end">
