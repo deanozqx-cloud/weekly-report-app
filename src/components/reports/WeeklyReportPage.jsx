@@ -1,35 +1,48 @@
 import { useState } from 'react';
 import { uid } from '../../lib/utils';
 import { generateReportFromRecords } from '../../lib/markdown';
+import { generateMonthlyTemplate } from '../../lib/prompts';
 import { useIsMobile } from '../../lib/hooks';
 import ReportEditor from './ReportEditor';
 import WeekPickerModal from './WeekPickerModal';
+import MonthPickerModal from './MonthPickerModal';
 import ImportModal from './ImportModal';
 
 export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeeklyReports, settings, setSettings }) {
   const [selectedId, setSelectedId] = useState(weeklyReports[0]?.id || null);
   const [showPicker, setShowPicker] = useState(false);
+  const [showMonthPicker, setShowMonthPicker] = useState(false);
   const [showImport, setShowImport] = useState(false);
+  const [typeTab, setTypeTab] = useState('weekly'); // 'weekly' | 'monthly'
   const [mobileTab, setMobileTab] = useState('list');
   const isMobile = useIsMobile();
 
   const selectedReport = weeklyReports.find(r => r.id === selectedId);
+  const visibleReports = weeklyReports.filter(r => (r.type || 'weekly') === typeTab);
+
+  const switchTab = (tab) => {
+    setTypeTab(tab);
+    const first = weeklyReports
+      .filter(r => (r.type || 'weekly') === tab)
+      .sort((a, b) => b.weekStart.localeCompare(a.weekStart))[0];
+    setSelectedId(first?.id || null);
+  };
 
   const handleConfirmGenerate = (weekStart, weekEnd, isEmpty, aiProvider) => {
     if (isEmpty && !window.confirm('该时段没有工作记录，是否仍要生成空白周报？')) return;
     setShowPicker(false);
 
     const records = workRecords.filter(r => r.date >= weekStart && r.date <= weekEnd);
-    const existing = weeklyReports.find(r => r.weekStart === weekStart && r.weekEnd === weekEnd);
+    const existing = weeklyReports.find(r => (r.type || 'weekly') === 'weekly' && r.weekStart === weekStart && r.weekEnd === weekEnd);
 
-    const generated = generateReportFromRecords(weekStart, records, weekEnd);
+    const generated = generateReportFromRecords(weekStart, records, weekEnd, settings?.projectStatuses);
     const newReport = { id: uid(), ...generated, weekEnd, autoAI: true, autoAIProvider: aiProvider || '', generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
 
     let newReports;
     if (existing) {
       // 覆盖时保留版本历史，并把被覆盖的旧内容存为快照
       newReports = weeklyReports.map(r => {
-        if (!(r.weekStart === weekStart && r.weekEnd === weekEnd)) return r;
+        if (!((r.type || 'weekly') === 'weekly' && r.weekStart === weekStart && r.weekEnd === weekEnd)) return r;
         const snap = { id: uid(), savedAt: new Date().toISOString(), label: '覆盖前', markdown: r.markdown || '', items: r.items || [], nextItems: r.nextItems || [] };
         const versions = [...(r.versions || []), snap].slice(-20);
         return { ...newReport, id: r.id, versions };
@@ -39,6 +52,38 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
     }
     setWeeklyReports(newReports);
     setSelectedId(existing ? existing.id : newReport.id);
+  };
+
+  // 生成月报：分层汇总（编辑器内 autoAI 触发 AI 生成，先落一个模板兜底）
+  const handleConfirmGenerateMonthly = (ym, start, end, aiProvider) => {
+    setShowMonthPicker(false);
+    const [y, m] = ym.split('-').map(Number);
+    const records = workRecords.filter(r => r.date >= start && r.date <= end);
+    const monthMilestones = (settings?.milestones || []).filter(x => x.date >= start && x.date <= end);
+    const template = generateMonthlyTemplate({ year: y, month: m, records, milestones: monthMilestones });
+    const existing = weeklyReports.find(r => r.type === 'monthly' && r.weekStart === start && r.weekEnd === end);
+    const newReport = {
+      id: uid(), type: 'monthly', weekStart: start, weekEnd: end, range: `${y}年${m}月`,
+      items: [], nextItems: [], markdown: template,
+      autoAI: true, autoAIProvider: aiProvider || '',
+      generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    };
+    let newReports;
+    if (existing) {
+      // 覆盖时保留版本历史，并把被覆盖的旧内容存为快照
+      newReports = weeklyReports.map(r => {
+        if (r.id !== existing.id) return r;
+        const snap = { id: uid(), savedAt: new Date().toISOString(), label: '覆盖前', markdown: r.markdown || '', items: r.items || [], nextItems: r.nextItems || [] };
+        const versions = [...(r.versions || []), snap].slice(-20);
+        return { ...newReport, id: r.id, versions };
+      });
+    } else {
+      newReports = [newReport, ...weeklyReports].sort((a, b) => b.weekStart.localeCompare(a.weekStart));
+    }
+    setWeeklyReports(newReports);
+    setSelectedId(existing ? existing.id : newReport.id);
+    setTypeTab('monthly');
+    if (isMobile) setMobileTab('editor');
   };
 
   const handleSaveReport = (updated) => {
@@ -54,7 +99,7 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
   };
 
   const handleImport = (weeks, conflict) => {
-    const existingWeekEnds = new Set(weeklyReports.map(r => r.weekEnd));
+    const existingWeekEnds = new Set(weeklyReports.filter(r => (r.type || 'weekly') === 'weekly').map(r => r.weekEnd));
     const newWorkRecords = [...workRecords];
     let newReports = [...weeklyReports];
 
@@ -70,12 +115,12 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
         newWorkRecords.push({ id: uid(), date: rec.date, project: rec.project, content: rec.content, hours: rec.hours, createdAt: new Date().toISOString() });
       });
 
-      const generated = generateReportFromRecords(w.weekStart, w.records, w.weekEnd);
+      const generated = generateReportFromRecords(w.weekStart, w.records, w.weekEnd, settings?.projectStatuses);
       const newReport = { id: uid(), ...generated, weekEnd: w.weekEnd, generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
       if (isConflict && conflict === 'overwrite') {
         // 覆盖时保留版本历史，并把被覆盖的旧内容存为快照
         newReports = newReports.map(r => {
-          if (r.weekEnd !== w.weekEnd) return r;
+          if ((r.type || 'weekly') !== 'weekly' || r.weekEnd !== w.weekEnd) return r;
           const snap = { id: uid(), savedAt: new Date().toISOString(), label: '覆盖前', markdown: r.markdown || '', items: r.items || [], nextItems: r.nextItems || [] };
           const versions = [...(r.versions || []), snap].slice(-20);
           return { ...newReport, id: r.id, versions };
@@ -95,28 +140,51 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
   const reportList = (
     <div className={`bg-white rounded-xl shadow-sm border border-gray-100 flex flex-col ${isMobile ? 'h-full' : ''}`} style={isMobile ? {} : {width:'220px',flexShrink:0}}>
       <div className="p-4 border-b border-gray-100 space-y-2">
-        <button
-          onClick={() => setShowPicker(true)}
-          className="w-full bg-blue-600 text-white text-sm py-2.5 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-          生成周报
-        </button>
-        <button
-          onClick={() => setShowImport(true)}
-          className="w-full border border-gray-200 text-gray-600 text-sm py-2 rounded-lg hover:bg-gray-50 font-medium flex items-center justify-center gap-2"
-        >
-          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
-          导入历史数据
-        </button>
+        {/* 报告类型切换 */}
+        <div className="flex bg-gray-100 rounded-lg p-0.5 text-xs">
+          <button
+            onClick={() => switchTab('weekly')}
+            className={`flex-1 py-1.5 rounded-md font-medium transition-colors ${typeTab === 'weekly' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >周报</button>
+          <button
+            onClick={() => switchTab('monthly')}
+            className={`flex-1 py-1.5 rounded-md font-medium transition-colors ${typeTab === 'monthly' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+          >月报</button>
+        </div>
+        {typeTab === 'weekly' ? (
+          <>
+            <button
+              onClick={() => setShowPicker(true)}
+              className="w-full bg-blue-600 text-white text-sm py-2.5 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+              生成周报
+            </button>
+            <button
+              onClick={() => setShowImport(true)}
+              className="w-full border border-gray-200 text-gray-600 text-sm py-2 rounded-lg hover:bg-gray-50 font-medium flex items-center justify-center gap-2"
+            >
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" /></svg>
+              导入历史数据
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => setShowMonthPicker(true)}
+            className="w-full bg-blue-600 text-white text-sm py-2.5 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
+            生成月报
+          </button>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
-        {weeklyReports.length === 0 ? (
+        {visibleReports.length === 0 ? (
           <div className="text-center text-gray-300 text-sm py-8 px-3">
             <svg className="w-10 h-10 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-            <p>点击上方按钮<br/>生成第一份周报</p>
+            <p>点击上方按钮<br/>生成第一份{typeTab === 'weekly' ? '周报' : '月报'}</p>
           </div>
-        ) : [...weeklyReports].sort((a, b) => b.weekStart.localeCompare(a.weekStart)).map(r => (
+        ) : [...visibleReports].sort((a, b) => b.weekStart.localeCompare(a.weekStart)).map(r => (
           <div
             key={r.id}
             className={`group flex items-center justify-between px-3 py-2.5 rounded-lg cursor-pointer mb-1 ${selectedId === r.id ? 'bg-blue-50 border border-blue-200' : 'hover:bg-gray-50'}`}
@@ -172,6 +240,15 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
         <WeekPickerModal
           onConfirm={handleConfirmGenerate}
           onClose={() => setShowPicker(false)}
+          workRecords={workRecords}
+          weeklyReports={weeklyReports}
+          settings={settings}
+        />
+      )}
+      {showMonthPicker && (
+        <MonthPickerModal
+          onConfirm={handleConfirmGenerateMonthly}
+          onClose={() => setShowMonthPicker(false)}
           workRecords={workRecords}
           weeklyReports={weeklyReports}
           settings={settings}

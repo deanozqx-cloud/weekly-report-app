@@ -5,7 +5,7 @@ import EditableSelect from '../ui/EditableSelect';
 import SearchableProjectSelect from '../ui/SearchableProjectSelect';
 import ProjectDetailModal from './ProjectDetailModal';
 
-export default function ProjectSummaryPage({ workRecords, weeklyReports = [], settings, setSettings }) {
+export default function ProjectSummaryPage({ workRecords, setWorkRecords, weeklyReports = [], settings, setSettings }) {
   const now = new Date();
   const [startDate, setStartDate] = useState(`${now.getFullYear()}-01-01`);
   const [endDate, setEndDate] = useState(today());
@@ -70,6 +70,36 @@ export default function ProjectSummaryPage({ workRecords, weeklyReports = [], se
     setSettings({ ...settings, projectStatuses: updated });
     setCheckedProjects(new Set());
     setBatchStatus('');
+  };
+
+  // 重命名项目：同步更新全部工作记录与项目状态；历史周报是快照，保持原文不动
+  const renameProject = (oldName, e) => {
+    e.stopPropagation();
+    const input = window.prompt('修改项目名称（将同步更新所有工作记录）', oldName);
+    if (input == null) return;
+    const newName = input.trim();
+    if (!newName || newName === oldName) return;
+    const count = workRecords.filter(r => r.project === oldName).length;
+    const exists = workRecords.some(r => r.project === newName);
+    const msg = exists
+      ? `项目「${newName}」已存在，「${oldName}」的 ${count} 条工作记录将并入该项目。确定合并？`
+      : `将把「${oldName}」的 ${count} 条工作记录改名为「${newName}」。已生成的历史周报保持原文不变。确定？`;
+    if (!window.confirm(msg)) return;
+    setWorkRecords(prev => prev.map(r => r.project === oldName ? { ...r, project: newName } : r));
+    setSettings(prev => {
+      const statuses = { ...(prev.projectStatuses || {}) };
+      if (statuses[oldName] != null && statuses[newName] == null) statuses[newName] = statuses[oldName];
+      delete statuses[oldName];
+      // 项目档案与里程碑一并迁移到新名称
+      const profiles = { ...(prev.projectProfiles || {}) };
+      if (profiles[oldName] != null && profiles[newName] == null) profiles[newName] = profiles[oldName];
+      delete profiles[oldName];
+      const milestones = (prev.milestones || []).map(m => m.project === oldName ? { ...m, project: newName } : m);
+      return { ...prev, projectStatuses: statuses, projectProfiles: profiles, milestones };
+    });
+    setCheckedProjects(prev => { const next = new Set(prev); next.delete(oldName); return next; });
+    if (filterProject === oldName) setFilterProject('');
+    if (selectedProject === oldName) setSelectedProject(null);
   };
 
   return (
@@ -144,13 +174,13 @@ export default function ProjectSummaryPage({ workRecords, weeklyReports = [], se
               </tr>
             </thead>
             <tbody>
-              {stats.map((s, idx) => {
+              {stats.map((s) => {
                 const isChecked = checkedProjects.has(s.project);
                 return (
                   <tr
                     key={s.project}
                     onClick={() => setSelectedProject(s.project)}
-                    className={`border-b border-gray-50 cursor-pointer transition-colors ${isChecked ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
+                    className={`group border-b border-gray-50 cursor-pointer transition-colors ${isChecked ? 'bg-blue-50' : 'hover:bg-gray-50'}`}
                   >
                     <td className="px-4 py-3 text-center" onClick={e => toggleCheck(s.project, e)}>
                       <input
@@ -162,7 +192,16 @@ export default function ProjectSummaryPage({ workRecords, weeklyReports = [], se
                     </td>
                     <td className="py-3 text-center text-xs text-gray-400">{allStats.indexOf(s) + 1}</td>
                     <td className="px-3 py-3 font-medium text-gray-800 max-w-0">
-                      <span className="block truncate">{s.project}</span>
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="truncate">{s.project}</span>
+                        <button
+                          onClick={e => renameProject(s.project, e)}
+                          className="opacity-0 group-hover:opacity-100 shrink-0 p-1 text-gray-300 hover:text-blue-600 hover:bg-blue-50 rounded transition-opacity"
+                          title="重命名项目"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                        </button>
+                      </div>
                     </td>
                     <td className="px-3 py-3 text-right text-blue-600 font-medium whitespace-nowrap">{s.hours.toFixed(1)}h</td>
                     <td className="px-3 py-3 text-right text-gray-600 whitespace-nowrap">{s.personDays}天</td>
@@ -199,6 +238,8 @@ export default function ProjectSummaryPage({ workRecords, weeklyReports = [], se
           weeklyReports={weeklyReports}
           startDate={startDate}
           endDate={endDate}
+          settings={settings}
+          setSettings={setSettings}
           onClose={() => setSelectedProject(null)}
         />
       )}

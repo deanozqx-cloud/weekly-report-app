@@ -1,6 +1,6 @@
 import { uid, getWeekRange, getCustomRange, getSunday } from './utils';
 
-export function generateReportFromRecords(weekStart, records, weekEnd) {
+export function generateReportFromRecords(weekStart, records, weekEnd, projectStatuses) {
   weekEnd = weekEnd || getSunday(weekStart);
   const range = getCustomRange(weekStart, weekEnd);
 
@@ -15,7 +15,8 @@ export function generateReportFromRecords(weekStart, records, weekEnd) {
     id: uid(),
     project,
     content: recs.map(r => r.content).join('；'),
-    progress: '开发中',
+    // 项目进度优先取汇总页维护的状态，未维护时回退默认值
+    progress: (projectStatuses && projectStatuses[project]) || '开发中',
     note: '',
   }));
 

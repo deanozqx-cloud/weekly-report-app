@@ -100,6 +100,11 @@ export default function WorkbenchPage({ workRecords, setWorkRecords, settings })
                     <span className="text-xs bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full shrink-0">{rec.hours}h</span>
                   </div>
                   <p className="text-sm text-gray-600 leading-relaxed">{rec.content}</p>
+                  {rec.outcome && (
+                    <p className="text-xs text-emerald-600 mt-1 flex items-start gap-1">
+                      <span className="shrink-0">🏆</span><span>{rec.outcome}</span>
+                    </p>
+                  )}
                 </div>
                 <div className="flex gap-1 ml-3 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                   <button onClick={() => { setEditRecord(rec); setShowForm(true); }} className="p-1.5 text-gray-400 hover:text-blue-600 hover:bg-blue-100 rounded-md">
