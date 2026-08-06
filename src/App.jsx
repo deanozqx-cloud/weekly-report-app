@@ -26,6 +26,8 @@ export default function App() {
   const [syncTime, setSyncTime] = useState(null);
   // 云端分表结构未初始化时回退旧 user_data 模式，并提示执行 supabase/schema.sql
   const [schemaMissing, setSchemaMissing] = useState(false);
+  // 上行闸门：仅在初始云端加载成功后才允许上传，避免加载失败时用过期本地数据覆盖云端
+  const [cloudReady, setCloudReady] = useState(false);
   const autoSaveTimer = useRef(null);
   const isMounted = useRef(true);
   // 上次已同步到云端的快照（差量同步的比较基准）；null = 尚未同步过，下次全量上传
@@ -102,7 +104,7 @@ export default function App() {
           setWeeklyReportsRaw(legacy.weeklyReports || []);
         }
         if (legacy.settings) setSettingsRaw(prev => mergeCloudSettings(prev, legacy.settings));
-        if (isMounted.current) { setSyncStatus('synced'); setSyncTime(new Date()); setSyncMsg(''); }
+        if (isMounted.current) { setCloudReady(true); setSyncStatus('synced'); setSyncTime(new Date()); setSyncMsg(''); }
         return;
       }
 
@@ -126,13 +128,15 @@ export default function App() {
         setSettingsRaw(mergedSet);
         lastSyncedRef.current = { workRecords: data.workRecords, weeklyReports: data.weeklyReports, settings: mergedSet };
       }
-      if (isMounted.current) { setSyncStatus('synced'); setSyncTime(new Date()); setSyncMsg(''); }
+      if (isMounted.current) { setCloudReady(true); setSyncStatus('synced'); setSyncTime(new Date()); setSyncMsg(''); }
     } catch (e) {
-      if (isMounted.current) { setSyncStatus('error'); setSyncMsg(e.message); }
+      if (isMounted.current) { setCloudReady(false); setSyncStatus('error'); setSyncMsg(`加载失败：${e.message}（已暂停上传，点同步图标重试）`); }
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveData = useCallback(async (wr, wpr, st) => {
+    // 初始加载未成功前禁止上传：此时本地可能是过期副本，上传会覆盖云端较新数据
+    if (!cloudReady) return;
     setSyncStatus('syncing');
     try {
       if (schemaMissing) {
@@ -146,7 +150,7 @@ export default function App() {
     } catch (e) {
       if (isMounted.current) { setSyncStatus('error'); setSyncMsg(e.message); }
     }
-  }, [schemaMissing]);
+  }, [schemaMissing, cloudReady]);
 
   useEffect(() => {
     const { data: { subscription } } = sb.auth.onAuthStateChange((event, session) => {
@@ -162,22 +166,28 @@ export default function App() {
         setCurrentUser(null);
         setWorkRecordsRaw([]);
         setWeeklyReportsRaw([]);
+        // settings 一并重置：含 API Key/项目档案/里程碑等，防止同一浏览器换账号登录时
+        // 上一账号的数据残留并被自动上传到新账号的云端
+        setSettingsRaw(defaultSettings);
         lastSyncedRef.current = null;
+        setCloudReady(false);
         setSyncStatus('idle');
       }
     });
     return () => subscription.unsubscribe();
   }, []);
 
-  // 数据变化时自动保存（防抖 3s）—— 含 settings，确保 API Key 等配置修改也会自动云同步
+  // 数据变化时自动保存（防抖 3s）—— 含 settings；cloudReady 闸门防止加载失败后带病上传。
+  // deps 含 saveData：schemaMissing/cloudReady 翻转后确保拿到新分支，不对着旧模式保存。
+  // 注意不能把 syncStatus 加进 deps（保存本身会翻转状态，会造成保存循环）
   useEffect(() => {
-    if (!currentUser || syncStatus === 'loading') return;
+    if (!currentUser || !cloudReady || syncStatus === 'loading') return;
     clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => {
       saveData(workRecords, weeklyReports, settings);
     }, 3000);
     return () => clearTimeout(autoSaveTimer.current);
-  }, [workRecords, weeklyReports, settings]);
+  }, [workRecords, weeklyReports, settings, currentUser, cloudReady, saveData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleLogin = (user) => {
     setCurrentUser(user);
@@ -212,7 +222,7 @@ export default function App() {
       <div
         className={`flex items-center gap-1.5 text-xs ${color} cursor-pointer`}
         title={syncStatus === 'error' ? syncMsg : syncTime ? `上次同步：${syncTime.toLocaleTimeString()}` : ''}
-        onClick={() => saveData(workRecords, weeklyReports, settings)}
+        onClick={() => cloudReady ? saveData(workRecords, weeklyReports, settings) : loadData()}
       >
         <span className={spin ? 'animate-spin inline-block' : ''}>{icon}</span>
         {!isMobile && <span>{label}</span>}
@@ -264,7 +274,7 @@ export default function App() {
                 settings={mergedSettings} setSettings={setSettings}
                 currentUser={currentUser}
                 syncStatus={syncStatus} syncMsg={syncMsg} syncTime={syncTime}
-                onManualSync={() => saveData(workRecords, weeklyReports, settings)}
+                onManualSync={() => cloudReady ? saveData(workRecords, weeklyReports, settings) : loadData()}
                 onLogout={handleLogout}
                 setWorkRecords={setWorkRecords}
                 setWeeklyReports={setWeeklyReports}

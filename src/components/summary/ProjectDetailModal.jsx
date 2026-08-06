@@ -35,6 +35,7 @@ export default function ProjectDetailModal({ project, workRecords, weeklyReports
     .sort((a, b) => b.date.localeCompare(a.date));
   const [msDraft, setMsDraft] = useState({ date: today(), title: '', metric: '' });
   const addMilestone = () => {
+    if (!msDraft.date) { alert('请选择日期'); return; }
     if (!msDraft.title.trim()) { alert('请填写里程碑事件'); return; }
     const ms = { id: uid(), project, date: msDraft.date, title: msDraft.title.trim(), metric: msDraft.metric.trim() };
     setSettings(prev => ({ ...prev, milestones: [...(prev.milestones || []), ms] }));

@@ -56,10 +56,11 @@ export async function sbSaveLegacy(workRecords, weeklyReports, settings) {
   );
   throwIf(error);
   if (settings) {
+    // 静默容错：旧结构可能没有 settings 列（supabase 错误走 resolve，这里显式 await 并忽略结果即可）
     await sb.from('user_data').upsert(
       { user_id: userId, settings },
       { onConflict: 'user_id' }
-    ).then(() => {}).catch(() => {});
+    );
   }
 }
 
