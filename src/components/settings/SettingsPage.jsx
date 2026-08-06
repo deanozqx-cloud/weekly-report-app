@@ -393,10 +393,9 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
                 onManualSync={onManualSync} onLogout={onLogout}
               />
 
-              <div className="bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-700 space-y-1">
-                <p className="font-medium">启用设置云同步（防止 API Key 丢失）</p>
-                <p>在 Supabase 控制台 → SQL Editor 中执行以下命令，即可将 API Key 等设置同步到云端：</p>
-                <code className="block bg-amber-100 rounded px-2 py-1 font-mono select-all">ALTER TABLE user_data ADD COLUMN IF NOT EXISTS settings JSONB;</code>
+              <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-xs text-gray-500 space-y-1">
+                <p className="font-medium text-gray-600">云端存储结构（v2 分表）</p>
+                <p>数据按实体分表存储（工作记录 / 报告 / 版本历史 / 项目 / 里程碑 / 设置），增量同步，只传变更部分。首次使用需在 Supabase 控制台 → SQL Editor 执行仓库中的 <code className="bg-gray-100 rounded px-1">supabase/schema.sql</code>；应用会自动从旧结构迁移数据（旧表保留作备份）。</p>
               </div>
 
               <div className="border-t border-gray-100 pt-5">
