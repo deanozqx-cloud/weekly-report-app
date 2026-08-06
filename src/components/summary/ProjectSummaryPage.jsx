@@ -46,12 +46,12 @@ export default function ProjectSummaryPage({ workRecords, setWorkRecords, weekly
       .sort((a, b) => b.hours - a.hours);
   }, [workRecords, startDate, endDate]);
 
-  // 各项目在日期范围内出现的周报份数（口径与详情弹窗一致）
+  // 各项目在日期范围内出现的周报份数（交叠即计入，跨区间边界的周报不漏；口径与详情弹窗一致）
   const reportCounts = useMemo(() => {
     const map = {};
     weeklyReports.forEach(r => {
       if ((r.type || 'weekly') !== 'weekly') return;
-      if (!(r.weekStart >= startDate && r.weekEnd <= endDate)) return;
+      if (!(r.weekStart <= endDate && r.weekEnd >= startDate)) return;
       new Set((r.items || []).map(it => it.project).filter(Boolean)).forEach(p => {
         map[p] = (map[p] || 0) + 1;
       });

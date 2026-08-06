@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import * as XLSX from 'xlsx';
 import { fmt, today, getSunday, getMonday } from '../../lib/utils';
 import Modal from '../ui/Modal';
 
@@ -44,6 +43,8 @@ export default function ImportModal({ onClose, onImport, weeklyReports }) {
     const file = e.target.files[0];
     if (!file) return;
     try {
+      // xlsx 体积大且仅导入时用到：按需动态加载，主包不背这个体积
+      const XLSX = await import('xlsx');
       const buf = await file.arrayBuffer();
       const wb = XLSX.read(buf, { cellDates: true });
       const ws = wb.Sheets[wb.SheetNames[0]];

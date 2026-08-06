@@ -11,7 +11,8 @@ export default function SearchableProjectSelect({ projects, value, onChange, pla
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  // 外部 value 变化时（如筛选被外部清空）对齐输入框：渲染期比较前值模式，替代 effect 中 setState
+  // 外部 value 变化时（如筛选被外部清空）对齐输入框：渲染期比较前值模式，替代 effect 中 setState。
+  // 组件自身触发的 onChange 会先把 prevValue 对齐到新值，因此不会误清用户正在输入的内容
   const [prevValue, setPrevValue] = useState(value);
   if (value !== prevValue) {
     setPrevValue(value);
@@ -22,8 +23,9 @@ export default function SearchableProjectSelect({ projects, value, onChange, pla
     ? projects.filter(p => p.toLowerCase().includes(query.toLowerCase()))
     : projects;
 
-  const select = p => { onChange(p); setQuery(p); setOpen(false); };
-  const clear = () => { onChange(''); setQuery(''); };
+  const handleInput = v => { setQuery(v); setPrevValue(''); onChange(''); setOpen(true); };
+  const select = p => { setPrevValue(p); setQuery(p); onChange(p); setOpen(false); };
+  const clear = () => { setPrevValue(''); setQuery(''); onChange(''); };
 
   return (
     <div ref={ref} className={`relative ${className}`}>
@@ -32,7 +34,7 @@ export default function SearchableProjectSelect({ projects, value, onChange, pla
           className="px-3 py-2 text-sm flex-1 focus:outline-none min-w-0"
           placeholder={placeholder}
           value={query}
-          onChange={e => { setQuery(e.target.value); onChange(''); setOpen(true); }}
+          onChange={e => handleInput(e.target.value)}
           onFocus={() => setOpen(true)}
         />
         {query ? (
