@@ -12,8 +12,9 @@ export default function ImportModal({ onClose, onImport, weeklyReports }) {
     if (!val && val !== 0) return null;
     if (val instanceof Date) return fmt(val);
     if (typeof val === 'number') {
+      // Excel 序列日期按天数定义，用 UTC 取日期分量，避免负时区（如美洲）偏一天
       const d = new Date(Math.round((val - 25569) * 86400 * 1000));
-      return fmt(d);
+      return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
     }
     if (typeof val === 'string') {
       // 带年份：如「2025年5月9日」
@@ -92,7 +93,8 @@ export default function ImportModal({ onClose, onImport, weeklyReports }) {
     onImport(preview.weeks, conflict);
   };
 
-  const existingWeekEnds = new Set(weeklyReports.map(r => r.weekEnd));
+  // 只与周报比冲突（口径与实际导入逻辑一致，月/季/年报周期末恰逢周日时不误报）
+  const existingWeekEnds = new Set(weeklyReports.filter(r => (r.type || 'weekly') === 'weekly').map(r => r.weekEnd));
   const conflictCount = preview ? preview.weeks.filter(w => existingWeekEnds.has(w.weekEnd)).length : 0;
 
   return (

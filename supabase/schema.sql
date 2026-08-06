@@ -100,3 +100,14 @@ begin
       'create policy "own rows" on %I for all using (auth.uid() = user_id) with check (auth.uid() = user_id)', t);
   end loop;
 end $$;
+
+-- ═══ 旧表 user_data 的 RLS 兜底（存在才处理；已有策略则不重复创建） ═══
+do $$
+begin
+  if exists (select 1 from pg_tables where schemaname = 'public' and tablename = 'user_data') then
+    execute 'alter table user_data enable row level security';
+    if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'user_data') then
+      execute 'create policy "own rows" on user_data for all using (auth.uid() = user_id) with check (auth.uid() = user_id)';
+    end if;
+  end if;
+end $$;

@@ -9,7 +9,11 @@ import PeriodPickerModal from './PeriodPickerModal';
 import ImportModal from './ImportModal';
 
 export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeeklyReports, settings, setSettings }) {
-  const [selectedId, setSelectedId] = useState(weeklyReports[0]?.id || null);
+  // 初始选中：只从周报（初始页签类型）中取，避免混入的月/季/年报被误选中
+  const [selectedId, setSelectedId] = useState(() =>
+    weeklyReports
+      .filter(r => (r.type || 'weekly') === 'weekly')
+      .sort((a, b) => b.weekStart.localeCompare(a.weekStart))[0]?.id || null);
   const [showPicker, setShowPicker] = useState(false);
   const [showPeriodPicker, setShowPeriodPicker] = useState(false);
   const [showImport, setShowImport] = useState(false);
@@ -93,10 +97,14 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
   };
 
   const handleDeleteReport = (id) => {
-    if (!window.confirm('确定删除这份周报？')) return;
+    if (!window.confirm('确定删除这份报告？')) return;
     const newReports = weeklyReports.filter(r => r.id !== id);
     setWeeklyReports(newReports);
-    setSelectedId(newReports[0]?.id || null);
+    // 回落选中项：只从当前页签类型中取
+    const sameTab = newReports
+      .filter(r => (r.type || 'weekly') === typeTab)
+      .sort((a, b) => b.weekStart.localeCompare(a.weekStart));
+    setSelectedId(sameTab[0]?.id || null);
   };
 
   const handleImport = (weeks, conflict) => {
@@ -135,7 +143,8 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
     setWorkRecords(newWorkRecords);
     setWeeklyReports(newReports);
     setShowImport(false);
-    setSelectedId(newReports[0]?.id || null);
+    // 导入产生的都是周报，选中项也只从周报中取
+    setSelectedId(newReports.find(r => (r.type || 'weekly') === 'weekly')?.id || null);
   };
 
   const reportList = (
@@ -219,7 +228,9 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
         </button>
       )}
       {selectedReport ? (
-        <ReportEditor report={selectedReport} onSave={handleSaveReport} settings={settings} setSettings={setSettings} weeklyReports={weeklyReports} workRecords={workRecords} setWorkRecords={setWorkRecords} />
+        <ReportEditor
+          key={`${selectedReport.id}:${selectedReport.generatedAt || ''}`}
+          report={selectedReport} onSave={handleSaveReport} settings={settings} setSettings={setSettings} weeklyReports={weeklyReports} workRecords={workRecords} setWorkRecords={setWorkRecords} />
       ) : (
         <div className="flex flex-col items-center justify-center h-full text-gray-300">
           <svg className="w-16 h-16 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
