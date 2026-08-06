@@ -67,4 +67,6 @@ export const defaultSettings = {
   projectProfiles: {},
   // 里程碑/关键成果记录：[{ id, date, project, title, metric }]
   milestones: [],
+  // 报告范文（仅半年报/年报开放）：{ half|annual: { sample, instructions } }，配置范文后按范文格式生成
+  reportTemplates: {},
 };

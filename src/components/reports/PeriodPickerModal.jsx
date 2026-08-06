@@ -41,8 +41,13 @@ export default function PeriodPickerModal({ type, onConfirm, onClose, workRecord
     : 1;
   const [year, setYear] = useState(curYear);
   const [seq, setSeq] = useState(curSeq);
+  const [extraMaterial, setExtraMaterial] = useState('');
   const availableProviders = settings?.llm?.providers || DEFAULT_PROVIDERS;
   const [selectedAIProvider, setSelectedAIProvider] = useState(settings?.llm?.default || availableProviders[0]?.id || '');
+
+  // 范文仅半年报/年报开放
+  const templateEnabled = type === 'half' || type === 'annual';
+  const hasSample = templateEnabled && !!(settings?.reportTemplates?.[type]?.sample || '').trim();
 
   const { start, end, label } = periodOf(type, year, seq);
   const records = workRecords.filter(r => r.date >= start && r.date <= end);
@@ -121,6 +126,33 @@ export default function PeriodPickerModal({ type, onConfirm, onClose, workRecord
           </p>
         )}
 
+        {/* 范文状态提示（仅半年报/年报） */}
+        {templateEnabled && (
+          hasSample ? (
+            <p className="text-xs text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+              ✓ 已配置{cfg.name}范文，将按范文的结构与文风生成（长文本格式）
+            </p>
+          ) : (
+            <p className="text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2">
+              未配置范文，将使用默认表格格式。可在「设置 → 报告模板」粘贴往期{cfg.name}作为格式范文
+            </p>
+          )
+        )}
+
+        {/* 补充资料 */}
+        <div>
+          <label className="block text-xs font-medium text-gray-500 mb-1">
+            补充资料 <span className="text-gray-400 font-normal">(可选，本次生成一次性使用)</span>
+          </label>
+          <textarea
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+            rows={4}
+            placeholder="粘贴 OKR、业绩数据、团队情况、领导要求等额外材料，AI 会充分利用…"
+            value={extraMaterial}
+            onChange={e => setExtraMaterial(e.target.value)}
+          />
+        </div>
+
         {/* AI 模型 + 操作 */}
         <div className="flex items-center justify-between gap-2 pt-1">
           <div className="flex items-center gap-2">
@@ -139,7 +171,7 @@ export default function PeriodPickerModal({ type, onConfirm, onClose, workRecord
             <button onClick={onClose} className="px-4 py-2 text-sm text-gray-600 hover:bg-gray-100 rounded-lg">取消</button>
             <button
               disabled={records.length === 0 && childReports.length === 0}
-              onClick={() => onConfirm(type, start, end, label, selectedAIProvider)}
+              onClick={() => onConfirm(type, start, end, label, selectedAIProvider, extraMaterial.trim())}
               className="px-5 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium disabled:opacity-40 disabled:cursor-not-allowed"
             >
               生成{cfg.name}

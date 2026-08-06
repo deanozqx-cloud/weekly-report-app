@@ -55,7 +55,7 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
   };
 
   // 生成长周期报告（月/季/半年/年）：分层汇总（编辑器内 autoAI 触发 AI 生成，先落一个模板兜底）
-  const handleConfirmGenerateLong = (type, start, end, label, aiProvider) => {
+  const handleConfirmGenerateLong = (type, start, end, label, aiProvider, extraMaterial) => {
     setShowPeriodPicker(false);
     const records = workRecords.filter(r => r.date >= start && r.date <= end);
     const periodMilestones = (settings?.milestones || []).filter(x => x.date >= start && x.date <= end);
@@ -64,6 +64,8 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
     const newReport = {
       id: uid(), type, weekStart: start, weekEnd: end, range: label,
       items: [], nextItems: [], markdown: template,
+      // 补充资料存在报告上，编辑器内「AI 重新生成」可复用
+      extraMaterial: extraMaterial || '',
       autoAI: true, autoAIProvider: aiProvider || '',
       generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     };

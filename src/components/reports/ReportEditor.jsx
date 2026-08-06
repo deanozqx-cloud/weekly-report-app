@@ -75,6 +75,8 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
         // 长周期报告：分层汇总——优先以期间内下一级已审校的报告为输入（季报吃月报、年报吃季报/月报）
         const { tierLabel, reports: childReports } = pickChildReports(weeklyReports, report.type, report.weekStart, report.weekEnd);
         const periodMilestones = (settings?.milestones || []).filter(m => m.date >= report.weekStart && m.date <= report.weekEnd);
+        // 范文仅半年报/年报开放，配置了才生效
+        const template = (report.type === 'half' || report.type === 'annual') ? settings?.reportTemplates?.[report.type] : null;
         prompt = buildLongReportPrompt({
           type: report.type,
           label: report.range,
@@ -85,6 +87,8 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
           profiles: settings?.projectProfiles || {},
           statuses: settings?.projectStatuses || {},
           styleRules,
+          template,
+          extraMaterial: report.extraMaterial || '',
         });
       } else {
         const pastReports = weeklyReports
@@ -173,7 +177,8 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
         onSave({ ...report, autoAI: false, ...preParsed, markdown: preMd, versions: baseVersions, updatedAt: new Date().toISOString() });
       }
 
-      const result = await callAI(settingsCopy, prompt);
+      // 半年报/年报是长文本，输出窗口放大到 8192 避免截断
+      const result = await callAI(settingsCopy, prompt, { maxTokens: (report.type === 'half' || report.type === 'annual') ? 8192 : 4096 });
 
       // 保存 AI 原始输出，用于后续修正对比（同时带上快照内容，避免 ...report 过期 prop 冲掉第一次保存的编辑内容）
       onSave({ ...report, ...preParsed, markdown: preMd, autoAI: false, aiGenerated: result, versions: baseVersions, updatedAt: new Date().toISOString() });
@@ -203,7 +208,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       onSave({ ...report, ...preParsed, markdown: cur, versions: baseVersions, updatedAt: new Date().toISOString() });
 
       const settingsCopy = { ...settings, llm: { ...settings.llm, default: selectedProvider } };
-      const result = await refineReport(settingsCopy, cur, settings?.styleRules || []);
+      const result = await refineReport(settingsCopy, cur, settings?.styleRules || [], (report.type === 'half' || report.type === 'annual') ? 8192 : 4096);
 
       setMarkdown(result);
       if (!isLong) {

@@ -54,10 +54,27 @@ export function pickChildReports(allReports, type, start, end) {
   return { tierLabel: '', reports: [] };
 }
 
-// 构建长周期报告生成 prompt（月报/季报/半年报/年报通用）
-export function buildLongReportPrompt({ type, label, childReports, childTierLabel, records, milestones, profiles, statuses, styleRules }) {
+// 范文注入长度上限（字符），避免撑爆上下文
+export const SAMPLE_CHAR_LIMIT = 8000;
+
+// 构建长周期报告生成 prompt（月报/季报/半年报/年报通用）。
+// template: { sample, instructions }（仅半年报/年报开放，配置范文后按范文格式生成，否则用默认表格格式）
+// extraMaterial: 生成时临时粘贴的补充资料（OKR、数据、要求等）
+export function buildLongReportPrompt({ type, label, childReports, childTierLabel, records, milestones, profiles, statuses, styleRules, template, extraMaterial }) {
   const cfg = LONG_TYPES[type] || LONG_TYPES.monthly;
+  const sample = (template?.sample || '').trim();
+  const useSample = !!sample;
   let prompt = `你是工作${cfg.name}助手。请根据以下材料生成一份专业的中文工作${cfg.name}。\n\n`;
+
+  if (useSample) {
+    const truncated = sample.length > SAMPLE_CHAR_LIMIT;
+    prompt += `【格式范文（往期${cfg.name}，请严格模仿其结构、章节划分、篇幅比例和行文风格）】\n`;
+    prompt += truncated ? sample.slice(0, SAMPLE_CHAR_LIMIT) + '\n……（范文过长已截断，请以以上部分的结构为准）' : sample;
+    prompt += `\n\n`;
+    if ((template?.instructions || '').trim()) {
+      prompt += `【格式补充说明（必须遵守）】\n${template.instructions.trim()}\n\n`;
+    }
+  }
 
   if (childReports.length) {
     prompt += `【${cfg.periodWord}各${childTierLabel}（用户已审校，最高优先级输入，请以此为准汇总提炼）】\n`;
@@ -102,15 +119,28 @@ export function buildLongReportPrompt({ type, label, childReports, childTierLabe
   if (hoursLines) prompt += `【${cfg.periodWord}各项目工时汇总】\n${hoursLines}\n\n`;
 
   const statusLines = projectsInPeriod.filter(p => statuses[p]).map(p => `- 项目「${p}」：${statuses[p]}`).join('\n');
-  if (statusLines) prompt += `【项目进度（人工维护，必须原样填入"项目进度"列，不要改写）】\n${statusLines}\n\n`;
+  if (statusLines) prompt += `【项目进度（人工维护，${useSample ? '表述进度时以此为准' : '必须原样填入"项目进度"列'}，不要改写）】\n${statusLines}\n\n`;
+
+  if ((extraMaterial || '').trim()) {
+    prompt += `【补充资料（用户提供的额外背景/数据/要求，请充分利用）】\n${extraMaterial.trim()}\n\n`;
+  }
 
   prompt += qualityBlock(styleRules);
 
-  const extraForLong = cfg.tier >= 3
-    ? `\n5. 工时占比高的重点项目要充分总结：交付了什么、相对项目目标进展如何；占比很低的琐碎项目可合并简写`
-    : '';
+  if (useSample) {
+    prompt += `
+要求：
+1. 全文严格按【格式范文】的结构、章节划分、篇幅比例和行文风格组织；范文中的具体事实、数据、项目名一律不得照抄，内容只能来自上方材料
+2. 报告周期为 ${label}；开头问候语与范文保持一致，若范文没有问候语则加上：您好：\n\n${cfg.periodWord}(${label})的工作总结具体如下，请查收。
+3. 人工维护的里程碑必须完整体现；工时占比高的重点项目充分总结（交付了什么、相对项目目标进展如何），琐碎项目合并简写
+4. 有数据写数据；材料中没有的不要编造
+5. 只输出Markdown内容（以长文本叙述为主，是否使用表格跟随范文），不要其他说明`;
+  } else {
+    const extraForLong = cfg.tier >= 3
+      ? `\n5. 工时占比高的重点项目要充分总结：交付了什么、相对项目目标进展如何；占比很低的琐碎项目可合并简写`
+      : '';
 
-  prompt += `
+    prompt += `
 要求：
 1. 开头加上：您好：\n\n${cfg.periodWord}(${label})的工作总结具体如下，请查收。
 2. 生成"${cfg.periodWord}工作总结"表格，列：项目 | 工时 | 人天 | 主要进展 | 项目进度（主要进展按项目汇总核心工作与结果，不要按${childTierLabel || '周'}流水账；工时/人天用上方汇总数据）
@@ -118,6 +148,7 @@ export function buildLongReportPrompt({ type, label, childReports, childTierLabe
 4. 生成"${cfg.nextWord}工作计划"表格，列：项目 | 工作计划（根据进展和项目目标合理推测，用户会自行修改）${extraForLong}
 ${cfg.tier >= 3 ? '6' : '5'}. "项目进度"列：人工维护的进度必须原样使用；未提供的项目根据工作内容判断
 ${cfg.tier >= 3 ? '7' : '6'}. 只输出Markdown内容，不要其他说明`;
+  }
 
   return prompt;
 }
