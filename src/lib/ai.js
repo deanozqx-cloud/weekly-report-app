@@ -1,6 +1,6 @@
 import { DEFAULT_PROVIDERS } from './constants';
 
-export async function callAI(settings, prompt) {
+export async function callAI(settings, prompt, { maxTokens = 4096 } = {}) {
   const providerId = settings.llm.default;
   const providers = settings.llm.providers || DEFAULT_PROVIDERS;
   const cfg = providers.find(p => p.id === providerId);
@@ -24,7 +24,7 @@ export async function callAI(settings, prompt) {
         // 浏览器直连 Anthropic API 必需此头，否则被 CORS 拦截
         'anthropic-dangerous-direct-browser-access': 'true',
       },
-      body: JSON.stringify({ model: cfg.model, max_tokens: 4096, messages: [{ role: 'user', content: prompt }] }),
+      body: JSON.stringify({ model: cfg.model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
     });
     if (!res.ok) throw new Error(await readError(res));
     const data = await res.json();
@@ -34,7 +34,7 @@ export async function callAI(settings, prompt) {
     const res = await fetch(`${baseUrl}/chat/completions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${cfg.apiKey}` },
-      body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: 4096 }),
+      body: JSON.stringify({ model: cfg.model, messages: [{ role: 'user', content: prompt }], max_tokens: maxTokens }),
     });
     if (!res.ok) throw new Error(await readError(res));
     const data = await res.json();
@@ -74,7 +74,7 @@ ${existingRules.length ? existingRules.map(r => `- ${r}`).join('\n') : '（无�
 }
 
 // AI 精修：逐行审稿，删水话、改具体，保留事实与表格结构
-export async function refineReport(settings, markdown, styleRules = []) {
+export async function refineReport(settings, markdown, styleRules = [], maxTokens = 4096) {
   const rulesBlock = styleRules.length
     ? `\n【用户写作规则（必须遵守）】\n${styleRules.map(r => `- ${r}`).join('\n')}\n`
     : '';
@@ -91,5 +91,5 @@ ${rulesBlock}
 ${markdown}
 
 只输出修改后的完整 Markdown，不要其他说明。`;
-  return callAI(settings, prompt);
+  return callAI(settings, prompt, { maxTokens });
 }

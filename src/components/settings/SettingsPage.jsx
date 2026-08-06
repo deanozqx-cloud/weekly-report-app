@@ -13,6 +13,9 @@ const SECTIONS = [
   { key: 'rules', label: 'AI 写作规则', icon: (
     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
   )},
+  { key: 'templates', label: '报告模板', icon: (
+    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
+  )},
   { key: 'general', label: '通用设置', icon: (
     <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
   )},
@@ -29,7 +32,20 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
   const [testing, setTesting] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newRule, setNewRule] = useState('');
+  const [tplType, setTplType] = useState('half'); // 报告模板页签内：'half' | 'annual'
   const isMobile = useIsMobile();
+
+  const TPL_NAMES = { half: '半年报', annual: '年报' };
+  const tpl = settings.reportTemplates?.[tplType] || { sample: '', instructions: '' };
+  const updateTemplate = (field, val) => {
+    setSettings(prev => ({
+      ...prev,
+      reportTemplates: {
+        ...(prev.reportTemplates || {}),
+        [tplType]: { ...(prev.reportTemplates?.[tplType] || { sample: '', instructions: '' }), [field]: val },
+      },
+    }));
+  };
 
   const styleRules = settings.styleRules || [];
   const addRule = () => {
@@ -280,6 +296,70 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
                     >清空</button>
                   )}
                 </div>
+              </div>
+            </div>
+          )}
+
+          {/* ══ 报告模板（范文） ══ */}
+          {section === 'templates' && (
+            <div className="fade-in">
+              <h3 className="font-semibold text-gray-800">报告模板</h3>
+              <p className="text-xs text-gray-400 mt-0.5 mb-4">
+                为半年报/年报配置格式范文：粘贴一篇往期报告，AI 生成时会严格模仿其结构、篇幅与文风（长文本格式）。<strong className="text-gray-500">配置了才生效</strong>，不配置则使用默认表格格式。
+              </p>
+
+              {/* 类型切换 */}
+              <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1 w-fit">
+                {['half', 'annual'].map(t => {
+                  const configured = !!(settings.reportTemplates?.[t]?.sample || '').trim();
+                  return (
+                    <button
+                      key={t}
+                      onClick={() => setTplType(t)}
+                      className={`px-4 py-1.5 text-sm rounded-md font-medium transition-colors flex items-center gap-1.5 ${tplType === t ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {TPL_NAMES[t]}
+                      {configured && <span className="w-1.5 h-1.5 rounded-full bg-green-400 inline-block" title="已配置范文"></span>}
+                    </button>
+                  );
+                })}
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-xs font-medium text-gray-500">格式范文（粘贴一篇往期{TPL_NAMES[tplType]}原文）</label>
+                    <span className={`text-xs ${tpl.sample.length > 8000 ? 'text-amber-600' : 'text-gray-400'}`}>
+                      {tpl.sample.length} 字{tpl.sample.length > 8000 ? '（超过 8000 字的部分生成时会被截断）' : ''}
+                    </span>
+                  </div>
+                  <textarea
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300 font-mono"
+                    rows={14}
+                    placeholder={`把往年的${TPL_NAMES[tplType]}整篇粘贴到这里。\nAI 会模仿它的章节划分、篇幅比例和行文风格，但不会照抄其中的事实和数据。`}
+                    value={tpl.sample}
+                    onChange={e => updateTemplate('sample', e.target.value)}
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-gray-500 mb-1">格式补充说明（可选）</label>
+                  <textarea
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    rows={3}
+                    placeholder={'额外的格式要求，如：\n分「总体回顾 / 重点项目 / 团队协作 / 明年规划」四部分，每部分 300-500 字，不用表格'}
+                    value={tpl.instructions}
+                    onChange={e => updateTemplate('instructions', e.target.value)}
+                  />
+                </div>
+                {(tpl.sample || tpl.instructions) && (
+                  <button
+                    onClick={() => {
+                      if (!window.confirm(`清空${TPL_NAMES[tplType]}的范文与说明？`)) return;
+                      setSettings(prev => ({ ...prev, reportTemplates: { ...(prev.reportTemplates || {}), [tplType]: { sample: '', instructions: '' } } }));
+                    }}
+                    className="px-3 py-1.5 text-sm text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
+                  >清空{TPL_NAMES[tplType]}模板</button>
+                )}
               </div>
             </div>
           )}

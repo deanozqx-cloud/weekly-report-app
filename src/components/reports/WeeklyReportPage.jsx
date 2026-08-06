@@ -1,19 +1,19 @@
 import { useState } from 'react';
 import { uid } from '../../lib/utils';
 import { generateReportFromRecords } from '../../lib/markdown';
-import { generateMonthlyTemplate } from '../../lib/prompts';
+import { generateLongReportTemplate, LONG_TYPES } from '../../lib/prompts';
 import { useIsMobile } from '../../lib/hooks';
 import ReportEditor from './ReportEditor';
 import WeekPickerModal from './WeekPickerModal';
-import MonthPickerModal from './MonthPickerModal';
+import PeriodPickerModal from './PeriodPickerModal';
 import ImportModal from './ImportModal';
 
 export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyReports, setWeeklyReports, settings, setSettings }) {
   const [selectedId, setSelectedId] = useState(weeklyReports[0]?.id || null);
   const [showPicker, setShowPicker] = useState(false);
-  const [showMonthPicker, setShowMonthPicker] = useState(false);
+  const [showPeriodPicker, setShowPeriodPicker] = useState(false);
   const [showImport, setShowImport] = useState(false);
-  const [typeTab, setTypeTab] = useState('weekly'); // 'weekly' | 'monthly'
+  const [typeTab, setTypeTab] = useState('weekly'); // 'weekly' | 'monthly' | 'quarterly' | 'half' | 'annual'
   const [mobileTab, setMobileTab] = useState('list');
   const isMobile = useIsMobile();
 
@@ -54,17 +54,18 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
     setSelectedId(existing ? existing.id : newReport.id);
   };
 
-  // 生成月报：分层汇总（编辑器内 autoAI 触发 AI 生成，先落一个模板兜底）
-  const handleConfirmGenerateMonthly = (ym, start, end, aiProvider) => {
-    setShowMonthPicker(false);
-    const [y, m] = ym.split('-').map(Number);
+  // 生成长周期报告（月/季/半年/年）：分层汇总（编辑器内 autoAI 触发 AI 生成，先落一个模板兜底）
+  const handleConfirmGenerateLong = (type, start, end, label, aiProvider, extraMaterial) => {
+    setShowPeriodPicker(false);
     const records = workRecords.filter(r => r.date >= start && r.date <= end);
-    const monthMilestones = (settings?.milestones || []).filter(x => x.date >= start && x.date <= end);
-    const template = generateMonthlyTemplate({ year: y, month: m, records, milestones: monthMilestones });
-    const existing = weeklyReports.find(r => r.type === 'monthly' && r.weekStart === start && r.weekEnd === end);
+    const periodMilestones = (settings?.milestones || []).filter(x => x.date >= start && x.date <= end);
+    const template = generateLongReportTemplate({ type, label, records, milestones: periodMilestones });
+    const existing = weeklyReports.find(r => r.type === type && r.weekStart === start && r.weekEnd === end);
     const newReport = {
-      id: uid(), type: 'monthly', weekStart: start, weekEnd: end, range: `${y}年${m}月`,
+      id: uid(), type, weekStart: start, weekEnd: end, range: label,
       items: [], nextItems: [], markdown: template,
+      // 补充资料存在报告上，编辑器内「AI 重新生成」可复用
+      extraMaterial: extraMaterial || '',
       autoAI: true, autoAIProvider: aiProvider || '',
       generatedAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     };
@@ -82,7 +83,7 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
     }
     setWeeklyReports(newReports);
     setSelectedId(existing ? existing.id : newReport.id);
-    setTypeTab('monthly');
+    setTypeTab(type);
     if (isMobile) setMobileTab('editor');
   };
 
@@ -142,14 +143,19 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
       <div className="p-4 border-b border-gray-100 space-y-2">
         {/* 报告类型切换 */}
         <div className="flex bg-gray-100 rounded-lg p-0.5 text-xs">
-          <button
-            onClick={() => switchTab('weekly')}
-            className={`flex-1 py-1.5 rounded-md font-medium transition-colors ${typeTab === 'weekly' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-          >周报</button>
-          <button
-            onClick={() => switchTab('monthly')}
-            className={`flex-1 py-1.5 rounded-md font-medium transition-colors ${typeTab === 'monthly' ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
-          >月报</button>
+          {[
+            { key: 'weekly', label: '周' },
+            { key: 'monthly', label: '月' },
+            { key: 'quarterly', label: '季' },
+            { key: 'half', label: '半年' },
+            { key: 'annual', label: '年' },
+          ].map(t => (
+            <button
+              key={t.key}
+              onClick={() => switchTab(t.key)}
+              className={`flex-1 py-1.5 rounded-md font-medium transition-colors whitespace-nowrap ${typeTab === t.key ? 'bg-white text-blue-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >{t.label}</button>
+          ))}
         </div>
         {typeTab === 'weekly' ? (
           <>
@@ -170,11 +176,11 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
           </>
         ) : (
           <button
-            onClick={() => setShowMonthPicker(true)}
+            onClick={() => setShowPeriodPicker(true)}
             className="w-full bg-blue-600 text-white text-sm py-2.5 rounded-lg hover:bg-blue-700 font-medium flex items-center justify-center gap-2"
           >
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-            生成月报
+            生成{LONG_TYPES[typeTab]?.name || '报告'}
           </button>
         )}
       </div>
@@ -182,7 +188,7 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
         {visibleReports.length === 0 ? (
           <div className="text-center text-gray-300 text-sm py-8 px-3">
             <svg className="w-10 h-10 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" /></svg>
-            <p>点击上方按钮<br/>生成第一份{typeTab === 'weekly' ? '周报' : '月报'}</p>
+            <p>点击上方按钮<br/>生成第一份{typeTab === 'weekly' ? '周报' : (LONG_TYPES[typeTab]?.name || '报告')}</p>
           </div>
         ) : [...visibleReports].sort((a, b) => b.weekStart.localeCompare(a.weekStart)).map(r => (
           <div
@@ -192,7 +198,7 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
           >
             <div className="min-w-0">
               <div className={`text-sm font-medium truncate ${selectedId === r.id ? 'text-blue-700' : 'text-gray-700'}`}>{r.range}</div>
-              <div className="text-xs text-gray-400">{r.weekStart.slice(0,4)}年</div>
+              <div className="text-xs text-gray-400">{(r.type || 'weekly') === 'weekly' ? `${r.weekStart.slice(0,4)}年` : (LONG_TYPES[r.type]?.name || '')}</div>
             </div>
             <button
               onClick={e => { e.stopPropagation(); handleDeleteReport(r.id); }}
@@ -245,10 +251,11 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
           settings={settings}
         />
       )}
-      {showMonthPicker && (
-        <MonthPickerModal
-          onConfirm={handleConfirmGenerateMonthly}
-          onClose={() => setShowMonthPicker(false)}
+      {showPeriodPicker && (
+        <PeriodPickerModal
+          type={typeTab}
+          onConfirm={handleConfirmGenerateLong}
+          onClose={() => setShowPeriodPicker(false)}
           workRecords={workRecords}
           weeklyReports={weeklyReports}
           settings={settings}
