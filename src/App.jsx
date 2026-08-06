@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { DEFAULT_PROVIDERS, defaultSettings } from './lib/constants';
 import { today } from './lib/utils';
 import { useStorage, useIsMobile } from './lib/hooks';
-import { sb, sbLoad, sbSave } from './lib/supabase';
+import { sb, sbSchemaOk, sbLoadAll, sbLoadLegacy, sbSaveLegacy, sbMigrateLegacy, sbSyncDiff } from './lib/supabase';
 import AuthPage from './components/auth/AuthPage';
 import Sidebar from './components/Sidebar';
 import MobileNav from './components/MobileNav';
@@ -24,8 +24,15 @@ export default function App() {
   const [syncStatus, setSyncStatus] = useState('idle');
   const [syncMsg, setSyncMsg] = useState('');
   const [syncTime, setSyncTime] = useState(null);
+  // 云端分表结构未初始化时回退旧 user_data 模式，并提示执行 supabase/schema.sql
+  const [schemaMissing, setSchemaMissing] = useState(false);
   const autoSaveTimer = useRef(null);
   const isMounted = useRef(true);
+  // 上次已同步到云端的快照（差量同步的比较基准）；null = 尚未同步过，下次全量上传
+  const lastSyncedRef = useRef(null);
+  // settings 的实时镜像（loadData 合并云端设置时需要同步读取当前值）
+  const settingsRef = useRef(settings);
+  useEffect(() => { settingsRef.current = settings; }, [settings]);
 
   useEffect(() => { isMounted.current = true; return () => { isMounted.current = false; }; }, []);
 
@@ -54,50 +61,92 @@ export default function App() {
   const setWeeklyReports = setWeeklyReportsRaw;
   const setSettings = setSettingsRaw;
 
+  // 合并云端设置到本地：远端优先，但 apiKey 取非空值、保留本地自定义 provider
+  const mergeCloudSettings = (local, remote) => {
+    if (!remote) return local;
+    const merged = { ...local, ...remote };
+    if (remote.llm) {
+      const remoteById = {};
+      (remote.llm.providers || []).forEach(p => { remoteById[p.id] = p; });
+      const localById = {};
+      (local.llm?.providers || []).forEach(p => { localById[p.id] = p; });
+      const mergedProviders = DEFAULT_PROVIDERS.map(p => {
+        const loc = localById[p.id] || {};
+        const rem = remoteById[p.id] || {};
+        return { ...p, ...loc, ...rem, apiKey: rem.apiKey || loc.apiKey || p.apiKey };
+      });
+      const defaultIds = new Set(DEFAULT_PROVIDERS.map(p => p.id));
+      const customById = {};
+      (local.llm?.providers || []).forEach(p => { if (!defaultIds.has(p.id)) customById[p.id] = p; });
+      (remote.llm.providers || []).forEach(p => {
+        if (!defaultIds.has(p.id)) customById[p.id] = { ...(customById[p.id] || {}), ...p, apiKey: p.apiKey || customById[p.id]?.apiKey || '' };
+      });
+      Object.values(customById).forEach(p => mergedProviders.push(p));
+      merged.llm = { ...local.llm, ...remote.llm, providers: mergedProviders };
+    } else {
+      merged.llm = local.llm;
+    }
+    return merged;
+  };
+
   const loadData = useCallback(async () => {
     setSyncStatus('loading');
     try {
-      const data = await sbLoad();
-      if (data) {
-        if (data.workRecords)   setWorkRecordsRaw(data.workRecords);
-        if (data.weeklyReports) setWeeklyReportsRaw(data.weeklyReports);
-        if (data.settings) setSettingsRaw(prev => {
-          const remote = data.settings;
-          const remoteById = {};
-          (remote.llm?.providers || []).forEach(p => { remoteById[p.id] = p; });
-          const localById = {};
-          (prev.llm?.providers || []).forEach(p => { localById[p.id] = p; });
-          const mergedProviders = DEFAULT_PROVIDERS.map(p => {
-            const local = localById[p.id] || {};
-            const rem = remoteById[p.id] || {};
-            return { ...p, ...local, ...rem, apiKey: rem.apiKey || local.apiKey || p.apiKey };
-          });
-          // 保留用户自行添加的自定义 provider（id 不在 DEFAULT_PROVIDERS 中），远端与本地合并、远端优先
-          const defaultIds = new Set(DEFAULT_PROVIDERS.map(p => p.id));
-          const customById = {};
-          (prev.llm?.providers || []).forEach(p => { if (!defaultIds.has(p.id)) customById[p.id] = p; });
-          (remote.llm?.providers || []).forEach(p => {
-            if (!defaultIds.has(p.id)) customById[p.id] = { ...(customById[p.id] || {}), ...p, apiKey: p.apiKey || customById[p.id]?.apiKey || '' };
-          });
-          Object.values(customById).forEach(p => mergedProviders.push(p));
-          return { ...prev, ...remote, llm: { ...prev.llm, ...remote.llm, providers: mergedProviders } };
-        });
+      const schemaOk = await sbSchemaOk();
+      if (!schemaOk) {
+        // 分表未建：回退旧 user_data 模式，保持一切可用
+        setSchemaMissing(true);
+        const legacy = await sbLoadLegacy();
+        if (legacy.workRecords?.length || legacy.weeklyReports?.length) {
+          setWorkRecordsRaw(legacy.workRecords || []);
+          setWeeklyReportsRaw(legacy.weeklyReports || []);
+        }
+        if (legacy.settings) setSettingsRaw(prev => mergeCloudSettings(prev, legacy.settings));
+        if (isMounted.current) { setSyncStatus('synced'); setSyncTime(new Date()); setSyncMsg(''); }
+        return;
+      }
+
+      setSchemaMissing(false);
+      let data = await sbLoadAll();
+      if (data.empty) {
+        // 分表为空：尝试从旧 user_data 自动迁移（user_data 保留作备份）
+        const legacy = await sbLoadLegacy();
+        if (legacy.workRecords?.length || legacy.weeklyReports?.length || legacy.settings) {
+          await sbMigrateLegacy(legacy);
+          data = await sbLoadAll();
+        }
+      }
+      if (data.empty) {
+        // 云端确实没有数据：保留本地现状，下次自动保存时全量上传
+        lastSyncedRef.current = null;
+      } else {
+        setWorkRecordsRaw(data.workRecords);
+        setWeeklyReportsRaw(data.weeklyReports);
+        const mergedSet = mergeCloudSettings(settingsRef.current, data.settingsFragment);
+        setSettingsRaw(mergedSet);
+        lastSyncedRef.current = { workRecords: data.workRecords, weeklyReports: data.weeklyReports, settings: mergedSet };
       }
       if (isMounted.current) { setSyncStatus('synced'); setSyncTime(new Date()); setSyncMsg(''); }
     } catch (e) {
       if (isMounted.current) { setSyncStatus('error'); setSyncMsg(e.message); }
     }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const saveData = useCallback(async (wr, wpr) => {
+  const saveData = useCallback(async (wr, wpr, st) => {
     setSyncStatus('syncing');
     try {
-      await sbSave(wr, wpr, settings);
+      if (schemaMissing) {
+        await sbSaveLegacy(wr, wpr, st);
+      } else {
+        const next = { workRecords: wr, weeklyReports: wpr, settings: st };
+        await sbSyncDiff(lastSyncedRef.current, next);
+        lastSyncedRef.current = next;
+      }
       if (isMounted.current) { setSyncStatus('synced'); setSyncTime(new Date()); setSyncMsg(''); }
     } catch (e) {
       if (isMounted.current) { setSyncStatus('error'); setSyncMsg(e.message); }
     }
-  }, [settings]);
+  }, [schemaMissing]);
 
   useEffect(() => {
     const { data: { subscription } } = sb.auth.onAuthStateChange((event, session) => {
@@ -113,6 +162,7 @@ export default function App() {
         setCurrentUser(null);
         setWorkRecordsRaw([]);
         setWeeklyReportsRaw([]);
+        lastSyncedRef.current = null;
         setSyncStatus('idle');
       }
     });
@@ -124,7 +174,7 @@ export default function App() {
     if (!currentUser || syncStatus === 'loading') return;
     clearTimeout(autoSaveTimer.current);
     autoSaveTimer.current = setTimeout(() => {
-      saveData(workRecords, weeklyReports);
+      saveData(workRecords, weeklyReports, settings);
     }, 3000);
     return () => clearTimeout(autoSaveTimer.current);
   }, [workRecords, weeklyReports, settings]);
@@ -162,7 +212,7 @@ export default function App() {
       <div
         className={`flex items-center gap-1.5 text-xs ${color} cursor-pointer`}
         title={syncStatus === 'error' ? syncMsg : syncTime ? `上次同步：${syncTime.toLocaleTimeString()}` : ''}
-        onClick={() => saveData(workRecords, weeklyReports)}
+        onClick={() => saveData(workRecords, weeklyReports, settings)}
       >
         <span className={spin ? 'animate-spin inline-block' : ''}>{icon}</span>
         {!isMobile && <span>{label}</span>}
@@ -187,6 +237,13 @@ export default function App() {
           </div>
         </div>
 
+        {/* 云端分表未初始化提示（回退旧模式运行中） */}
+        {schemaMissing && (
+          <div className="px-4 md:px-6 py-2 bg-amber-50 border-b border-amber-200 text-xs text-amber-700">
+            云端数据库还在旧结构上运行。请在 Supabase 控制台 → SQL Editor 执行仓库中的 <code className="bg-amber-100 rounded px-1">supabase/schema.sql</code>，刷新后应用会自动迁移数据到新分表结构（旧数据保留作备份）。
+          </div>
+        )}
+
         {/* 内容区 */}
         <div className={`flex-1 overflow-hidden p-4 md:p-5 ${isMobile ? 'pb-20' : ''}`}>
           <div className="h-full page-transition" key={activePage}>
@@ -207,7 +264,7 @@ export default function App() {
                 settings={mergedSettings} setSettings={setSettings}
                 currentUser={currentUser}
                 syncStatus={syncStatus} syncMsg={syncMsg} syncTime={syncTime}
-                onManualSync={() => saveData(workRecords, weeklyReports)}
+                onManualSync={() => saveData(workRecords, weeklyReports, settings)}
                 onLogout={handleLogout}
                 setWorkRecords={setWorkRecords}
                 setWeeklyReports={setWeeklyReports}
