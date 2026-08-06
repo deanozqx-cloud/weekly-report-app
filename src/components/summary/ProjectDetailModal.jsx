@@ -9,8 +9,9 @@ export default function ProjectDetailModal({ project, workRecords, weeklyReports
     .filter(r => r.project === project && r.date >= startDate && r.date <= endDate)
     .sort((a, b) => b.date.localeCompare(a.date));
 
+  // 与汇总页计数同口径：与日期区间交叠即计入（跨区间边界的周报不漏）
   const reports = weeklyReports
-    .filter(r => (r.type || 'weekly') === 'weekly' && r.weekStart >= startDate && r.weekEnd <= endDate &&
+    .filter(r => (r.type || 'weekly') === 'weekly' && r.weekStart <= endDate && r.weekEnd >= startDate &&
       (r.items || []).some(it => it.project === project))
     .sort((a, b) => b.weekStart.localeCompare(a.weekStart));
 

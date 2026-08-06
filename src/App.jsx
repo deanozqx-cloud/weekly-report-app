@@ -175,7 +175,8 @@ export default function App() {
       }
     });
     return () => subscription.unsubscribe();
-  }, []);
+    // 仅挂载时订阅一次；引用的 loadData 与各 setter 均为稳定引用
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 数据变化时自动保存（防抖 3s）—— 含 settings；cloudReady 闸门防止加载失败后带病上传。
   // deps 含 saveData：schemaMissing/cloudReady 翻转后确保拿到新分支，不对着旧模式保存。
