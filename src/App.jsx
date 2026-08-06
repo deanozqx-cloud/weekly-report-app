@@ -213,22 +213,21 @@ export default function App() {
 
   const pageTitle = { workbench: '工作台', report: '周报管理', detail: '工作明细', summary: '项目汇总', settings: '设置' };
 
-  const SyncIndicator = () => {
-    const label = { loading: '加载中…', syncing: '同步中…', synced: '已同步', error: '同步失败', idle: '' }[syncStatus] || '';
-    const color = { loading: 'text-blue-400', syncing: 'text-blue-400', synced: 'text-green-500', error: 'text-red-400', idle: 'text-gray-300' }[syncStatus];
-    const icon = { loading: '↻', syncing: '↻', synced: '✓', error: '✗', idle: '○' }[syncStatus];
-    const spin = syncStatus === 'loading' || syncStatus === 'syncing';
-    return (
-      <div
-        className={`flex items-center gap-1.5 text-xs ${color} cursor-pointer`}
-        title={syncStatus === 'error' ? syncMsg : syncTime ? `上次同步：${syncTime.toLocaleTimeString()}` : ''}
-        onClick={() => cloudReady ? saveData(workRecords, weeklyReports, settings) : loadData()}
-      >
-        <span className={spin ? 'animate-spin inline-block' : ''}>{icon}</span>
-        {!isMobile && <span>{label}</span>}
-      </div>
-    );
-  };
+  // 同步指示器：普通 JSX 变量而非渲染期定义的组件（避免每次渲染重建组件类型）
+  const syncLabel = { loading: '加载中…', syncing: '同步中…', synced: '已同步', error: '同步失败', idle: '' }[syncStatus] || '';
+  const syncColor = { loading: 'text-blue-400', syncing: 'text-blue-400', synced: 'text-green-500', error: 'text-red-400', idle: 'text-gray-300' }[syncStatus];
+  const syncIcon = { loading: '↻', syncing: '↻', synced: '✓', error: '✗', idle: '○' }[syncStatus];
+  const syncSpin = syncStatus === 'loading' || syncStatus === 'syncing';
+  const syncIndicator = (
+    <div
+      className={`flex items-center gap-1.5 text-xs ${syncColor} cursor-pointer`}
+      title={syncStatus === 'error' ? syncMsg : syncTime ? `上次同步：${syncTime.toLocaleTimeString()}` : ''}
+      onClick={() => cloudReady ? saveData(workRecords, weeklyReports, settings) : loadData()}
+    >
+      <span className={syncSpin ? 'animate-spin inline-block' : ''}>{syncIcon}</span>
+      {!isMobile && <span>{syncLabel}</span>}
+    </div>
+  );
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -242,7 +241,7 @@ export default function App() {
           )}
           <h1 className="text-base font-semibold text-gray-800">{pageTitle[activePage]}</h1>
           <div className="ml-auto flex items-center gap-3">
-            <SyncIndicator />
+            {syncIndicator}
             <span className="text-xs text-gray-400">{today()}</span>
           </div>
         </div>

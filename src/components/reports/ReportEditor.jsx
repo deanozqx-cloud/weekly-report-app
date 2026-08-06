@@ -24,12 +24,8 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
   const availableProviders = settings?.llm?.providers || DEFAULT_PROVIDERS;
   const [selectedProvider, setSelectedProvider] = useState(settings?.llm?.default || availableProviders[0]?.id || '');
 
-  useEffect(() => {
-    setItems(report.items || []);
-    setNextItems(report.nextItems || []);
-    setMarkdown(report.markdown || '');
-    setMdMode(isLongType(report.type));
-  }, [report.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 状态重置依赖父组件的 key={id:generatedAt} 强制重挂载：切换报告或覆盖重新生成时
+  // 整个编辑器重建，useState 初始值即为最新报告内容，无需 effect 同步
 
   const weekRecords = useMemo(() => workRecords.filter(r => r.date >= report.weekStart && r.date <= report.weekEnd), [workRecords, report.weekStart, report.weekEnd]);
   const hoursByProject = useMemo(() => {
@@ -180,11 +176,19 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       // 半年报/年报是长文本，输出窗口放大到 8192 避免截断
       const result = await callAI(settingsCopy, prompt, { maxTokens: (report.type === 'half' || report.type === 'annual') ? 8192 : 4096 });
 
-      // 保存 AI 原始输出，用于后续修正对比（同时带上快照内容，避免 ...report 过期 prop 冲掉第一次保存的编辑内容）
-      onSave({ ...report, ...preParsed, markdown: preMd, autoAI: false, aiGenerated: result, versions: baseVersions, updatedAt: new Date().toISOString() });
+      // AI 结果立即落库（不落库的话切换报告/关页面就丢了，而同步指示灯却显示"已同步"）；
+      // 生成前的内容已在上方存为「AI生成前」版本快照，可随时恢复
+      const parsed = parseMarkdownToReport(result);
+      onSave({
+        ...report,
+        items: isLong ? (report.items || []) : parsed.items,
+        nextItems: isLong ? (report.nextItems || []) : parsed.nextItems,
+        markdown: result,
+        autoAI: false, aiGenerated: result, versions: baseVersions,
+        updatedAt: new Date().toISOString(),
+      });
 
       setMarkdown(result);
-      const parsed = parseMarkdownToReport(result);
       if (parsed.items.length) setItems(parsed.items);
       if (parsed.nextItems.length) setNextItems(parsed.nextItems);
       setMdMode(true);
@@ -210,11 +214,21 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       const settingsCopy = { ...settings, llm: { ...settings.llm, default: selectedProvider } };
       const result = await refineReport(settingsCopy, cur, settings?.styleRules || [], (report.type === 'half' || report.type === 'annual') ? 8192 : 4096);
 
+      // 精修结果同样立即落库（精修前内容已存为「精修前」版本快照）
+      const parsedR = parseMarkdownToReport(result);
+      onSave({
+        ...report,
+        items: isLong ? (report.items || []) : parsedR.items,
+        nextItems: isLong ? (report.nextItems || []) : parsedR.nextItems,
+        markdown: result,
+        versions: baseVersions,
+        updatedAt: new Date().toISOString(),
+      });
+
       setMarkdown(result);
       if (!isLong) {
-        const parsed = parseMarkdownToReport(result);
-        if (parsed.items.length) setItems(parsed.items);
-        if (parsed.nextItems.length) setNextItems(parsed.nextItems);
+        if (parsedR.items.length) setItems(parsedR.items);
+        if (parsedR.nextItems.length) setNextItems(parsedR.nextItems);
       }
       setMdMode(true);
     } catch (e) {
@@ -243,15 +257,19 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     if (existing) {
       setWorkRecords(workRecords.map(r => r.id === existing.id ? { ...r, hours: lastDayHours } : r));
     } else {
-      setWorkRecords([...workRecords, { id: uid(), date: report.weekEnd, project, content: project, hours: lastDayHours, createdAt: new Date().toISOString() }]);
+      setWorkRecords([...workRecords, { id: uid(), date: report.weekEnd, project, content: '工时调整', hours: lastDayHours, createdAt: new Date().toISOString() }]);
     }
   };
 
+  // 新建报告自动触发 AI 生成：挂载时执行一次（父组件 key 保证每份新生成的报告都会重挂载）。
+  // 延迟到下一拍执行，避免在 effect 中同步 setState；卸载时取消
   useEffect(() => {
-    if (report.autoAI) {
+    if (!report.autoAI) return;
+    const timer = setTimeout(() => {
       onSave({ ...report, autoAI: false, updatedAt: new Date().toISOString() });
       handleAiGen(report.autoAIProvider || undefined);
-    }
+    }, 0);
+    return () => clearTimeout(timer);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (

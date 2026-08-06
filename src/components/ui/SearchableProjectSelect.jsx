@@ -11,7 +11,12 @@ export default function SearchableProjectSelect({ projects, value, onChange, pla
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  useEffect(() => { setQuery(value || ''); }, [value]);
+  // 外部 value 变化时（如筛选被外部清空）对齐输入框：渲染期比较前值模式，替代 effect 中 setState
+  const [prevValue, setPrevValue] = useState(value);
+  if (value !== prevValue) {
+    setPrevValue(value);
+    setQuery(value || '');
+  }
 
   const filtered = query
     ? projects.filter(p => p.toLowerCase().includes(query.toLowerCase()))
