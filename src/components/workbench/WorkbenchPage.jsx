@@ -23,7 +23,7 @@ export default function WorkbenchPage({ workRecords, setWorkRecords, settings })
     workRecords.filter(r => r.date === selectedDate),
   [workRecords, selectedDate]);
 
-  const dayHours = dayRecords.reduce((s, r) => s + r.hours, 0);
+  const dayHours = Math.round(dayRecords.reduce((s, r) => s + r.hours, 0) * 100) / 100;
   const holiday = HOLIDAYS[selectedDate];
   const weekend = isWeekend(selectedDate);
 

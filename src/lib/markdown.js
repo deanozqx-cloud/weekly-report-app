@@ -1,5 +1,11 @@
 import { uid, getWeekRange, getCustomRange, getSunday } from './utils';
 
+// 表格单元格转义：内容可能来自多行 textarea，含换行或 | 会撕裂表格行。
+// 换行折为空格（表格单元格无法承载换行），| 转义为 \|；splitTableRow 负责反转义
+export function escapeCell(s) {
+  return String(s ?? '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
+}
+
 export function generateReportFromRecords(weekStart, records, weekEnd, projectStatuses) {
   weekEnd = weekEnd || getSunday(weekStart);
   const range = getCustomRange(weekStart, weekEnd);
@@ -34,7 +40,7 @@ export function generateReportFromRecords(weekStart, records, weekEnd, projectSt
   md += `\n## 下周工作计划\n\n`;
   md += `| 项目 | 工作内容 |\n|------|----------|\n`;
   nextItems.forEach(it => {
-    md += `| ${it.project} | ${it.content} |\n`;
+    md += `| ${escapeCell(it.project)} | ${escapeCell(it.content)} |\n`;
   });
 
   return { items, nextItems, markdown: md, weekStart, weekEnd, range };
@@ -45,17 +51,26 @@ export function buildMarkdownTable(items, hoursByProject) {
   md += `| 项目 | 工时 | 工作内容 | 项目进度 | 备注 |\n|------|------|----------|----------|------|\n`;
   items.forEach(it => {
     const h = hoursByProject && hoursByProject[it.project] != null ? `${hoursByProject[it.project]}h` : '';
-    md += `| ${it.project} | ${h} | ${it.content||''} | ${it.progress||''} | ${it.note||''} |\n`;
+    md += `| ${escapeCell(it.project)} | ${h} | ${escapeCell(it.content)} | ${escapeCell(it.progress)} | ${escapeCell(it.note)} |\n`;
   });
   return md;
 }
 
-// 切分 Markdown 表格行为单元格数组，保留空单元格（不能 filter(Boolean)，否则空列导致后续列错位）
+// 切分 Markdown 表格行为单元格数组：保留空单元格（不能 filter(Boolean)，否则空列导致后续列错位），
+// \| 视为单元格内的字面 |（与 escapeCell 配对反转义）
 export function splitTableRow(line) {
   let s = line.trim();
   if (s.startsWith('|')) s = s.slice(1);
-  if (s.endsWith('|')) s = s.slice(0, -1);
-  return s.split('|').map(c => c.trim());
+  if (s.endsWith('|') && !s.endsWith('\\|')) s = s.slice(0, -1);
+  const cells = [];
+  let cur = '';
+  for (let i = 0; i < s.length; i++) {
+    if (s[i] === '\\' && s[i + 1] === '|') { cur += '|'; i++; }
+    else if (s[i] === '|') { cells.push(cur.trim()); cur = ''; }
+    else cur += s[i];
+  }
+  cells.push(cur.trim());
+  return cells;
 }
 
 // 是否为表头分隔行，如 | --- | :---: |
@@ -104,7 +119,7 @@ export function buildMarkdown(report, hoursByProject) {
   md += `\n## 下周工作计划\n\n`;
   md += `| 项目 | 工作内容 |\n|------|----------|\n`;
   (report.nextItems||[]).forEach(it => {
-    md += `| ${it.project} | ${it.content||''} |\n`;
+    md += `| ${escapeCell(it.project)} | ${escapeCell(it.content)} |\n`;
   });
   return md;
 }

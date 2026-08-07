@@ -108,12 +108,13 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
   };
 
   const handleImport = (weeks, conflict) => {
-    const existingWeekEnds = new Set(weeklyReports.filter(r => (r.type || 'weekly') === 'weekly').map(r => r.weekEnd));
+    // 与生成周报同口径：weekStart+weekEnd 双键匹配，避免自定义周期与标准周仅 weekEnd 相同时被一并覆盖成重复内容
+    const existingWeekKeys = new Set(weeklyReports.filter(r => (r.type || 'weekly') === 'weekly').map(r => `${r.weekStart}|${r.weekEnd}`));
     const newWorkRecords = [...workRecords];
     let newReports = [...weeklyReports];
 
     weeks.forEach(w => {
-      const isConflict = existingWeekEnds.has(w.weekEnd);
+      const isConflict = existingWeekKeys.has(`${w.weekStart}|${w.weekEnd}`);
       if (isConflict && conflict === 'skip') return;
 
       if (isConflict && conflict === 'overwrite') {
@@ -129,7 +130,7 @@ export default function WeeklyReportPage({ workRecords, setWorkRecords, weeklyRe
       if (isConflict && conflict === 'overwrite') {
         // 覆盖时保留版本历史，并把被覆盖的旧内容存为快照
         newReports = newReports.map(r => {
-          if ((r.type || 'weekly') !== 'weekly' || r.weekEnd !== w.weekEnd) return r;
+          if ((r.type || 'weekly') !== 'weekly' || r.weekStart !== w.weekStart || r.weekEnd !== w.weekEnd) return r;
           const snap = { id: uid(), savedAt: new Date().toISOString(), label: '覆盖前', markdown: r.markdown || '', items: r.items || [], nextItems: r.nextItems || [] };
           const versions = [...(r.versions || []), snap].slice(-20);
           return { ...newReport, id: r.id, versions };

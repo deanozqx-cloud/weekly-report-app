@@ -1,6 +1,8 @@
 // ─────────────────────────────────────────
 // AI 生成质量约束与长周期报告 prompt 构建
 // ─────────────────────────────────────────
+import { escapeCell } from './markdown';
+
 
 // 无信息量套话黑名单（prompt 中引用）
 export const BANNED_PHRASES = ['持续推进', '稳步开展', '有序进行', '积极配合', '不断完善', '稳步推进', '持续优化'];
@@ -162,7 +164,7 @@ export function generateLongReportTemplate({ type, label, records, milestones })
   let md = `您好：\n\n${cfg.periodWord}(${label})的工作总结具体如下，请查收。\n\n`;
   md += `## ${cfg.periodWord}工作总结\n\n| 项目 | 工时 | 人天 | 主要进展 | 项目进度 |\n|------|------|------|----------|----------|\n`;
   Object.entries(hoursByProject).sort((a, b) => b[1] - a[1]).forEach(([p, h]) => {
-    md += `| ${p} | ${h}h | ${(h / 7.5).toFixed(1)} | | |\n`;
+    md += `| ${escapeCell(p)} | ${h}h | ${(h / 7.5).toFixed(1)} | | |\n`;
   });
   md += `\n## 关键成果与里程碑\n\n`;
   if (milestones.length) {
@@ -171,6 +173,6 @@ export function generateLongReportTemplate({ type, label, records, milestones })
     md += `- \n`;
   }
   md += `\n## ${cfg.nextWord}工作计划\n\n| 项目 | 工作计划 |\n|------|----------|\n`;
-  Object.keys(hoursByProject).forEach(p => { md += `| ${p} | |\n`; });
+  Object.keys(hoursByProject).forEach(p => { md += `| ${escapeCell(p)} | |\n`; });
   return md;
 }
