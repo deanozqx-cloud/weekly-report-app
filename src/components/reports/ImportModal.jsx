@@ -27,6 +27,9 @@ export default function ImportModal({ onClose, onImport, weeklyReports }) {
         if (dateStr > today()) dateStr = `${year - 1}${dateStr.slice(4)}`;
         return dateStr;
       }
+      // ISO/斜杠日期直接按分量组装：new Date('YYYY-MM-DD') 按 UTC 解析，负时区会偏一天
+      const iso = val.trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+      if (iso) return `${iso[1]}-${String(iso[2]).padStart(2,'0')}-${String(iso[3]).padStart(2,'0')}`;
       const d = new Date(val);
       if (!isNaN(d)) return fmt(d);
     }
@@ -94,9 +97,9 @@ export default function ImportModal({ onClose, onImport, weeklyReports }) {
     onImport(preview.weeks, conflict);
   };
 
-  // 只与周报比冲突（口径与实际导入逻辑一致，月/季/年报周期末恰逢周日时不误报）
-  const existingWeekEnds = new Set(weeklyReports.filter(r => (r.type || 'weekly') === 'weekly').map(r => r.weekEnd));
-  const conflictCount = preview ? preview.weeks.filter(w => existingWeekEnds.has(w.weekEnd)).length : 0;
+  // 只与周报比冲突，weekStart+weekEnd 双键（口径与实际导入逻辑一致）
+  const existingWeekKeys = new Set(weeklyReports.filter(r => (r.type || 'weekly') === 'weekly').map(r => `${r.weekStart}|${r.weekEnd}`));
+  const conflictCount = preview ? preview.weeks.filter(w => existingWeekKeys.has(`${w.weekStart}|${w.weekEnd}`)).length : 0;
 
   return (
     <Modal title="导入历史数据" onClose={onClose} width="max-w-lg">
@@ -122,7 +125,7 @@ export default function ImportModal({ onClose, onImport, weeklyReports }) {
               </p>
               <div className="max-h-48 overflow-y-auto scrollbar-thin space-y-1">
                 {preview.weeks.map(w => {
-                  const isConflict = existingWeekEnds.has(w.weekEnd);
+                  const isConflict = existingWeekKeys.has(`${w.weekStart}|${w.weekEnd}`);
                   return (
                     <div key={w.weekEnd} className={`flex items-center justify-between px-2 py-1 rounded text-xs ${isConflict ? 'bg-amber-50 text-amber-700' : 'bg-white text-gray-600'}`}>
                       <span>{w.weekNum ? `第${w.weekNum}周 ` : ''}{w.weekStart} ～ {w.weekEnd}</span>

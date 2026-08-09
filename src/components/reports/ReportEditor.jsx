@@ -33,7 +33,10 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     weekRecords.forEach(r => { map[r.project] = (map[r.project] || 0) + r.hours; });
     return map;
   }, [weekRecords]);
-  const totalWeekHours = useMemo(() => weekRecords.reduce((s, r) => s + r.hours, 0), [weekRecords]);
+  // 合计四舍五入到两位，避免 0.1+0.2 类浮点误差直接展示
+  const totalWeekHours = useMemo(() => Math.round(weekRecords.reduce((s, r) => s + r.hours, 0) * 100) / 100, [weekRecords]);
+  // 工时列编辑草稿：输入框受控于 hoursByProject 实时计算值，直接受控会导致清空立刻回弹无法输入过程态
+  const [hoursDraft, setHoursDraft] = useState({});
 
   const handleSave = () => {
     const md = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject);
@@ -189,8 +192,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       });
 
       setMarkdown(result);
-      if (parsed.items.length) setItems(parsed.items);
-      if (parsed.nextItems.length) setNextItems(parsed.nextItems);
+      if (!isLong) { setItems(parsed.items); setNextItems(parsed.nextItems); }
       setMdMode(true);
     } catch (e) {
       setAiError(e.message);
@@ -226,10 +228,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       });
 
       setMarkdown(result);
-      if (!isLong) {
-        if (parsedR.items.length) setItems(parsedR.items);
-        if (parsedR.nextItems.length) setNextItems(parsedR.nextItems);
-      }
+      if (!isLong) { setItems(parsedR.items); setNextItems(parsedR.nextItems); }
       setMdMode(true);
     } catch (e) {
       setAiError(e.message);
@@ -255,9 +254,9 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     const otherHours = projRecs.filter(r => r.id !== (existing && existing.id)).reduce((s, r) => s + r.hours, 0);
     const lastDayHours = Math.max(0, Math.round((newTotal - otherHours) * 10) / 10);
     if (existing) {
-      setWorkRecords(workRecords.map(r => r.id === existing.id ? { ...r, hours: lastDayHours } : r));
+      setWorkRecords(prev => prev.map(r => r.id === existing.id ? { ...r, hours: lastDayHours } : r));
     } else {
-      setWorkRecords([...workRecords, { id: uid(), date: report.weekEnd, project, content: '工时调整', hours: lastDayHours, createdAt: new Date().toISOString() }]);
+      setWorkRecords(prev => [...prev, { id: uid(), date: report.weekEnd, project, content: '工时调整', hours: lastDayHours, createdAt: new Date().toISOString() }]);
     }
   };
 
@@ -370,7 +369,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
               className="w-full border border-gray-200 rounded-lg p-4 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
               style={{minHeight:'500px'}}
               value={markdown}
-              onChange={e => { setMarkdown(e.target.value); const p = parseMarkdownToReport(e.target.value); if(p.items.length) setItems(p.items); if(p.nextItems.length) setNextItems(p.nextItems); }}
+              onChange={e => { setMarkdown(e.target.value); const p = parseMarkdownToReport(e.target.value); setItems(p.items); setNextItems(p.nextItems); }}
             />
           )
         ) : (
@@ -399,9 +398,18 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
                     <input
                       type="number" min="0" step="0.5"
                       className="w-full border border-blue-200 rounded px-1 py-1 text-xs text-blue-700 font-medium text-center focus:outline-none focus:ring-1 focus:ring-blue-400 bg-blue-50"
-                      value={hoursByProject[it.project] ?? ''}
+                      value={hoursDraft[it.project] ?? (hoursByProject[it.project] ?? '')}
                       placeholder="0"
-                      onChange={e => { const v = parseFloat(e.target.value); if (!isNaN(v) && v >= 0) handleHoursChange(it.project, v); }}
+                      title="输入后回车或移开焦点生效"
+                      onChange={e => setHoursDraft(d => ({ ...d, [it.project]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                      onBlur={e => {
+                        // 失焦才提交：输入过程不写记录，避免过程值（如输入"12"时的"1"）
+                        // 被当成目标工时写入；空值/非法值直接还原为计算值，不做任何修改
+                        const v = parseFloat(e.target.value);
+                        if (!isNaN(v) && v >= 0 && it.project) handleHoursChange(it.project, v);
+                        setHoursDraft(d => { const c = { ...d }; delete c[it.project]; return c; });
+                      }}
                     />
                     <EditableSelect
                       value={it.progress || '开发中'}
