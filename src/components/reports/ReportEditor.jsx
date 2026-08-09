@@ -254,9 +254,9 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     const otherHours = projRecs.filter(r => r.id !== (existing && existing.id)).reduce((s, r) => s + r.hours, 0);
     const lastDayHours = Math.max(0, Math.round((newTotal - otherHours) * 10) / 10);
     if (existing) {
-      setWorkRecords(workRecords.map(r => r.id === existing.id ? { ...r, hours: lastDayHours } : r));
+      setWorkRecords(prev => prev.map(r => r.id === existing.id ? { ...r, hours: lastDayHours } : r));
     } else {
-      setWorkRecords([...workRecords, { id: uid(), date: report.weekEnd, project, content: '工时调整', hours: lastDayHours, createdAt: new Date().toISOString() }]);
+      setWorkRecords(prev => [...prev, { id: uid(), date: report.weekEnd, project, content: '工时调整', hours: lastDayHours, createdAt: new Date().toISOString() }]);
     }
   };
 
@@ -400,13 +400,16 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
                       className="w-full border border-blue-200 rounded px-1 py-1 text-xs text-blue-700 font-medium text-center focus:outline-none focus:ring-1 focus:ring-blue-400 bg-blue-50"
                       value={hoursDraft[it.project] ?? (hoursByProject[it.project] ?? '')}
                       placeholder="0"
-                      onChange={e => {
-                        const t = e.target.value;
-                        setHoursDraft(d => ({ ...d, [it.project]: t }));
-                        const v = parseFloat(t);
-                        if (!isNaN(v) && v >= 0) handleHoursChange(it.project, v);
+                      title="输入后回车或移开焦点生效"
+                      onChange={e => setHoursDraft(d => ({ ...d, [it.project]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                      onBlur={e => {
+                        // 失焦才提交：输入过程不写记录，避免过程值（如输入"12"时的"1"）
+                        // 被当成目标工时写入；空值/非法值直接还原为计算值，不做任何修改
+                        const v = parseFloat(e.target.value);
+                        if (!isNaN(v) && v >= 0 && it.project) handleHoursChange(it.project, v);
+                        setHoursDraft(d => { const c = { ...d }; delete c[it.project]; return c; });
                       }}
-                      onBlur={() => setHoursDraft(d => { const c = { ...d }; delete c[it.project]; return c; })}
                     />
                     <EditableSelect
                       value={it.progress || '开发中'}
