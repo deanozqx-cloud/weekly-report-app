@@ -35,6 +35,13 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
   }, [weekRecords]);
   // 合计四舍五入到两位，避免 0.1+0.2 类浮点误差直接展示
   const totalWeekHours = useMemo(() => Math.round(weekRecords.reduce((s, r) => s + r.hours, 0) * 100) / 100, [weekRecords]);
+  // 合计忠于表格：只统计表内出现的项目（去重）。AI 生成的行可能合并/漏掉某些项目，
+  // 若直接用全部记录总工时，会出现「合计 ≠ 各行之和」的累加观感；表外记录单独提示
+  const tableHours = useMemo(() => {
+    const projects = [...new Set(items.map(it => it.project).filter(Boolean))];
+    return Math.round(projects.reduce((s, p) => s + (hoursByProject[p] || 0), 0) * 100) / 100;
+  }, [items, hoursByProject]);
+  const hiddenHours = Math.round((totalWeekHours - tableHours) * 100) / 100;
   // 工时列编辑草稿：输入框受控于 hoursByProject 实时计算值，直接受控会导致清空立刻回弹无法输入过程态
   const [hoursDraft, setHoursDraft] = useState({});
 
@@ -252,6 +259,10 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     // 差额落到目标记录上：除该目标记录外的其余记录（含周末同项目其他记录）都计入 otherHours，
     // 保证调整后该项目本周合计精确等于 newTotal
     const otherHours = projRecs.filter(r => r.id !== (existing && existing.id)).reduce((s, r) => s + r.hours, 0);
+    if (newTotal < otherHours) {
+      // 调整只作用于周期最后一天的记录，无法把合计压到其他日期已有记录之下——说明下限而不是静默钳位
+      alert(`「${project}」在本周其他日期已有 ${Math.round(otherHours * 100) / 100}h 记录，此处最低只能调到 ${Math.round(otherHours * 100) / 100}h。\n如需更低，请到工作台修改对应日期的记录。`);
+    }
     const lastDayHours = Math.max(0, Math.round((newTotal - otherHours) * 10) / 10);
     if (existing) {
       setWorkRecords(prev => prev.map(r => r.id === existing.id ? { ...r, hours: lastDayHours } : r));
@@ -386,9 +397,17 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
                 <div className="grid bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 px-3 py-2" style={{gridTemplateColumns:'1fr 2fr 60px 1fr 1fr auto'}}>
                   <span>项目</span><span>工作内容</span><span>本周工时</span><span>项目进度</span><span>备注</span><span></span>
                 </div>
-                {totalWeekHours > 0 && (
+                {(totalWeekHours > 0 || tableHours > 0) && (
                   <div className="grid items-center px-3 py-2 gap-2 bg-blue-50 border-b border-blue-100 text-xs font-medium text-blue-700" style={{gridTemplateColumns:'1fr 2fr 60px 1fr 1fr auto'}}>
-                    <span>本周合计</span><span></span><span className="font-bold">{totalWeekHours}h</span><span></span><span></span><span></span>
+                    <span>本周合计</span>
+                    <span>
+                      {hiddenHours > 0 && (
+                        <span className="font-normal text-amber-600" title="该周期的工作记录中，有部分项目未出现在下方表格里（可能被 AI 合并或漏掉了项目行）。可添加对应项目行将其计入，或忽略此提示。">
+                          ⚠ 另有 {hiddenHours}h 记录未列入表格（记录总计 {totalWeekHours}h）
+                        </span>
+                      )}
+                    </span>
+                    <span className="font-bold">{tableHours}h</span><span></span><span></span><span></span>
                   </div>
                 )}
                 {items.map((it, idx) => (
