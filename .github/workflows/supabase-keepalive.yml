@@ -1,0 +1,31 @@
+# Supabase 免费版项目连续 7 天无 API 活动会被自动暂停（暂停后应用登录/同步失败）。
+# 本 workflow 每 3 天 ping 一次 REST 接口制造活动，防止周报助手的项目被闲置暂停。
+#
+# 说明：
+# - 使用的 anon key 本就随前端源码公开，且受 RLS 保护（匿名请求拿不到任何数据），
+#   写在这里没有新增暴露面
+# - 预期响应是 200 + 空数组 []；请求到达 API 网关即计为活动
+# - 注意：GitHub 对超过 60 天无提交活动的仓库会自动停用定时 workflow
+#   （会发邮件提醒，去 Actions 页点一下 Enable 即可恢复）
+name: Supabase Keepalive
+
+on:
+  schedule:
+    - cron: '37 3 */3 * *'   # 每 3 天一次，03:37 UTC（北京时间 11:37）
+  workflow_dispatch: {}       # 支持手动触发，便于验证
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        run: |
+          SUPABASE_URL='https://qjzzmaqwudawizwkxipc.supabase.co'
+          ANON_KEY='eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InFqenptYXF3dWRhd2l6d2t4aXBjIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Nzg2MjE0NDAsImV4cCI6MjA5NDE5NzQ0MH0.PaKTRzXNsRQFFgGGDoQd-hnDblSHD1gtey6GmoIN--Y'
+          status=$(curl -sS -o /tmp/body -w '%{http_code}' \
+            "$SUPABASE_URL/rest/v1/user_settings?select=user_id&limit=1" \
+            -H "apikey: $ANON_KEY" \
+            -H "Authorization: Bearer $ANON_KEY")
+          echo "HTTP $status, body: $(cat /tmp/body)"
+          # 200=正常；其他状态码大概率意味着项目已被暂停或配置变化，让任务失败以便收到通知
+          [ "$status" = "200" ]
