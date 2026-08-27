@@ -4,6 +4,7 @@ import { uid } from '../../lib/utils';
 import { callAI, distillStyleRules, refineReport } from '../../lib/ai';
 import { qualityBlock, buildLongReportPrompt, pickChildReports, isLongType, LONG_TYPES } from '../../lib/prompts';
 import { buildMarkdown, parseMarkdownToReport, renderMarkdown } from '../../lib/markdown';
+import { copyRichText, copyPlainText } from '../../lib/clipboard';
 import EditableSelect from '../ui/EditableSelect';
 
 export default function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [], workRecords = [], setWorkRecords }) {
@@ -17,7 +18,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
   const [aiLoading, setAiLoading] = useState(false);
   const [refining, setRefining] = useState(false);
   const [aiError, setAiError] = useState('');
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState(''); // '' | 'rich' | 'md'
   const [saved, setSaved] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [previewVersion, setPreviewVersion] = useState(null);
@@ -63,11 +64,23 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     }
   };
 
-  const handleCopy = () => {
-    const md = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject);
-    navigator.clipboard.writeText(md);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const currentMarkdown = () => (mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject));
+
+  // 富文本复制：粘进企业微信/邮件/Word 时保留表格与排版
+  const handleCopyRich = async () => {
+    const md = currentMarkdown();
+    const ok = await copyRichText(renderMarkdown(md, { inline: true }), md);
+    if (!ok) { setAiError('复制失败，请改用「复制源码」后手动粘贴'); return; }
+    setCopied('rich');
+    setTimeout(() => setCopied(''), 2000);
+  };
+
+  // 源码复制：粘到支持 Markdown 的地方（飞书文档、语雀、GitHub 等）
+  const handleCopyMd = async () => {
+    const ok = await copyPlainText(currentMarkdown());
+    if (!ok) { setAiError('复制失败，请手动选中内容复制'); return; }
+    setCopied('md');
+    setTimeout(() => setCopied(''), 2000);
   };
 
   const handleAiGen = async (providerOverride) => {
@@ -339,6 +352,24 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
               <button onClick={() => { if (!mdMode) setMarkdown(buildMarkdown({ ...report, items, nextItems }, hoursByProject)); setMdMode(true); }} className={`px-3 h-full transition-colors ${mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Markdown</button>
             </div>
           )}
+          {/* 复制：两种模式下都可用 */}
+          <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded-lg px-2 h-8 ml-auto">
+            <button
+              onClick={handleCopyRich}
+              title="带格式复制，粘贴到企业微信/邮件/Word 时保留表格"
+              className={`text-xs font-medium whitespace-nowrap transition-colors ${copied === 'rich' ? 'text-green-600' : 'text-emerald-600 hover:text-emerald-700'}`}
+            >
+              {copied === 'rich' ? '已复制 ✓' : '复制（带格式）'}
+            </button>
+            <span className="text-gray-300 mx-1 select-none">|</span>
+            <button
+              onClick={handleCopyMd}
+              title="复制 Markdown 源码，适合粘到飞书文档/语雀等支持 Markdown 的地方"
+              className={`text-xs font-medium whitespace-nowrap transition-colors ${copied === 'md' ? 'text-green-600' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              {copied === 'md' ? '已复制 ✓' : '源码'}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -346,20 +377,12 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       {mdMode && (
         <div className="flex items-center justify-between px-5 py-2 bg-gray-50 border-b border-gray-100">
           <span className="text-xs font-semibold text-gray-400 tracking-widest uppercase">Markdown</span>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setMdPreview(v => !v)}
-              className={`px-3 py-1 text-xs rounded-md border transition-colors ${mdPreview ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'border-gray-200 text-gray-500 bg-white hover:border-gray-300'}`}
-            >
-              {mdPreview ? '编辑源码' : '预览'}
-            </button>
-            <button
-              onClick={handleCopy}
-              className={`px-3 py-1 text-xs rounded-md border transition-colors ${copied ? 'bg-green-50 border-green-200 text-green-600' : 'border-gray-200 text-gray-500 bg-white hover:border-gray-300'}`}
-            >
-              {copied ? '已复制 ✓' : '复制'}
-            </button>
-          </div>
+          <button
+            onClick={() => setMdPreview(v => !v)}
+            className={`px-3 py-1 text-xs rounded-md border transition-colors ${mdPreview ? 'bg-indigo-50 border-indigo-200 text-indigo-600' : 'border-gray-200 text-gray-500 bg-white hover:border-gray-300'}`}
+          >
+            {mdPreview ? '编辑源码' : '预览'}
+          </button>
         </div>
       )}
 

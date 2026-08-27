@@ -124,9 +124,20 @@ export function buildMarkdown(report, hoursByProject) {
   return md;
 }
 
-export function renderMarkdown(md) {
+// 富文本复制用的内联样式：粘贴到企业微信/邮件/Word 时不会带上应用的 CSS，
+// 表格边框等必须写进 style 属性才能保留
+const INLINE_STYLE = {
+  h2: 'font-size:15px;font-weight:600;margin:16px 0 8px;color:#1e293b;',
+  p: 'margin:6px 0;color:#334155;line-height:1.7;font-size:14px;',
+  table: 'border-collapse:collapse;font-size:13px;margin:8px 0 16px;',
+  th: 'background:#f1f5f9;padding:7px 10px;text-align:left;font-weight:600;color:#1e293b;border:1px solid #94a3b8;',
+  td: 'padding:7px 10px;color:#334155;border:1px solid #cbd5e1;vertical-align:top;',
+};
+
+export function renderMarkdown(md, { inline = false } = {}) {
   if (!md) return '';
   const esc = s => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const sty = tag => (inline ? ` style="${INLINE_STYLE[tag]}"` : '');
   const lines = md.split('\n');
   const out = [];
   let inTable = false;
@@ -138,20 +149,23 @@ export function renderMarkdown(md) {
 
     if (line.startsWith('## ')) {
       if (inTable) { out.push('</table>'); inTable = false; headerDone = false; }
-      out.push(`<h2>${line.slice(3)}</h2>`);
+      out.push(`<h2${sty('h2')}>${line.slice(3)}</h2>`);
     } else if (/^\|/.test(line)) {
-      if (!inTable) { out.push('<table>'); inTable = true; headerDone = false; }
+      if (!inTable) { out.push(`<table${sty('table')}>`); inTable = true; headerDone = false; }
       if (isTableSeparator(line)) { headerDone = true; continue; }
       const cols = splitTableRow(line); // 保留空单元格，避免列错位
       const tag = headerDone ? 'td' : 'th';
-      out.push(`<tr>${cols.map(c => `<${tag}>${c}</${tag}>`).join('')}</tr>`);
+      out.push(`<tr>${cols.map(c => `<${tag}${sty(tag)}>${c}</${tag}>`).join('')}</tr>`);
       if (!headerDone) headerDone = true;
     } else {
       if (inTable) { out.push('</table>'); inTable = false; headerDone = false; }
-      if (line.trim()) out.push(`<p>${line}</p>`);
+      if (line.trim()) out.push(`<p${sty('p')}>${line}</p>`);
       else out.push('<br>');
     }
   }
   if (inTable) out.push('</table>');
-  return out.join('');
+  const body = out.join('');
+  return inline
+    ? `<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;color:#334155;">${body}</div>`
+    : body;
 }

@@ -276,6 +276,8 @@ export default function App() {
                 syncStatus={syncStatus} syncMsg={syncMsg} syncTime={syncTime}
                 onManualSync={() => cloudReady ? saveData(workRecords, weeklyReports, settings) : loadData()}
                 onLogout={handleLogout}
+                workRecords={workRecords}
+                weeklyReports={weeklyReports}
                 setWorkRecords={setWorkRecords}
                 setWeeklyReports={setWeeklyReports}
               />
