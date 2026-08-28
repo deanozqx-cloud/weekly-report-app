@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { DEFAULT_PROVIDERS } from '../../lib/constants';
 import { uid } from '../../lib/utils';
 import { callAI } from '../../lib/ai';
+import { exportJson, exportExcel } from '../../lib/export';
 import { useIsMobile } from '../../lib/hooks';
 import SbUserSection from './SbUserSection';
 import AddProviderModal from './AddProviderModal';
@@ -24,7 +25,7 @@ const SECTIONS = [
   )},
 ];
 
-export default function SettingsPage({ settings, setSettings, currentUser, syncStatus, syncMsg, syncTime, onManualSync, onLogout, setWorkRecords, setWeeklyReports }) {
+export default function SettingsPage({ settings, setSettings, currentUser, syncStatus, syncMsg, syncTime, onManualSync, onLogout, workRecords = [], weeklyReports = [], setWorkRecords, setWeeklyReports }) {
   const providers = settings.llm.providers || DEFAULT_PROVIDERS;
   const [section, setSection] = useState('llm');
   const [activeId, setActiveId] = useState(providers[0]?.id || '');
@@ -399,8 +400,29 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
               </div>
 
               <div className="border-t border-gray-100 pt-5">
+                <h3 className="font-medium text-gray-700 mb-1">数据导出</h3>
+                <p className="text-xs text-gray-400 mb-3">
+                  当前共 <strong className="text-gray-600">{workRecords.length}</strong> 条工作记录、
+                  <strong className="text-gray-600">{weeklyReports.length}</strong> 份报告。
+                  出于安全考虑，导出内容不含 API Key。
+                </p>
+                <div className="flex flex-wrap gap-3">
+                  <button
+                    onClick={() => { try { exportJson(workRecords, weeklyReports, settings); } catch (e) { alert('导出失败：' + e.message); } }}
+                    className="px-4 py-2 text-sm border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50"
+                    title="完整备份：工作记录、全部报告（含版本历史）、项目档案、里程碑、写作规则、报告范文"
+                  >导出完整备份（JSON）</button>
+                  <button
+                    onClick={async () => { try { await exportExcel(workRecords, weeklyReports, settings); } catch (e) { alert('导出失败：' + e.message); } }}
+                    className="px-4 py-2 text-sm border border-gray-200 text-gray-600 rounded-lg hover:bg-gray-50"
+                    title="工作记录 / 报告 / 项目 / 里程碑 四张表，便于查阅与二次加工"
+                  >导出表格（Excel）</button>
+                </div>
+              </div>
+
+              <div className="border-t border-gray-100 pt-5">
                 <h3 className="font-medium text-gray-700 mb-1">数据管理</h3>
-                <p className="text-xs text-gray-400 mb-3">清空后数据将同步删除，无法恢复，请谨慎操作</p>
+                <p className="text-xs text-gray-400 mb-3">清空后数据将同步删除，无法恢复；建议先用上方「导出完整备份」留一份</p>
                 <div className="flex flex-wrap gap-3">
                   <button
                     onClick={() => { if (window.confirm('确定清空全部工作记录？此操作不可恢复。')) { setWorkRecords([]); } }}
