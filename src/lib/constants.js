@@ -69,4 +69,6 @@ export const defaultSettings = {
   milestones: [],
   // 报告范文（仅半年报/年报开放）：{ half|annual: { sample, instructions } }，配置范文后按范文格式生成
   reportTemplates: {},
+  // 邮件发送：收件人/抄送/主题模板与发件人显示名（SMTP 凭据在服务端，不存这里）
+  mail: { to: '', cc: '', subjectTemplate: '{类型}-{姓名}-{周期}', senderName: '' },
 };

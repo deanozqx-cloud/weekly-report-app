@@ -5,6 +5,7 @@ import { callAI, distillStyleRules, refineReport } from '../../lib/ai';
 import { qualityBlock, buildLongReportPrompt, pickChildReports, isLongType, LONG_TYPES } from '../../lib/prompts';
 import { buildMarkdown, parseMarkdownToReport, renderMarkdown } from '../../lib/markdown';
 import { copyRichText, copyPlainText } from '../../lib/clipboard';
+import SendMailModal from './SendMailModal';
 import EditableSelect from '../ui/EditableSelect';
 
 export default function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [], workRecords = [], setWorkRecords }) {
@@ -20,6 +21,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
   const [aiError, setAiError] = useState('');
   const [copied, setCopied] = useState(''); // '' | 'rich' | 'md'
   const [saved, setSaved] = useState(false);
+  const [showMail, setShowMail] = useState(false);
   const [showVersions, setShowVersions] = useState(false);
   const [previewVersion, setPreviewVersion] = useState(null);
   const availableProviders = settings?.llm?.providers || DEFAULT_PROVIDERS;
@@ -352,8 +354,16 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
               <button onClick={() => { if (!mdMode) setMarkdown(buildMarkdown({ ...report, items, nextItems }, hoursByProject)); setMdMode(true); }} className={`px-3 h-full transition-colors ${mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Markdown</button>
             </div>
           )}
+          <button
+            onClick={() => setShowMail(true)}
+            title="填好收件人后一键发出，发送前可预览"
+            className="flex items-center gap-1.5 h-8 px-3 text-xs font-medium rounded-lg border border-blue-200 text-blue-600 bg-blue-50 hover:bg-blue-100 transition-colors ml-auto whitespace-nowrap"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+            发邮件
+          </button>
           {/* 复制：两种模式下都可用 */}
-          <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded-lg px-2 h-8 ml-auto">
+          <div className="flex items-center gap-1 bg-gray-50 border border-gray-200 rounded-lg px-2 h-8">
             <button
               onClick={handleCopyRich}
               title="带格式复制，粘贴到企业微信/邮件/Word 时保留表格"
@@ -496,6 +506,16 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
           </>
         )}
       </div>
+
+      {showMail && (
+        <SendMailModal
+          report={report}
+          markdown={currentMarkdown()}
+          settings={settings}
+          setSettings={setSettings}
+          onClose={() => setShowMail(false)}
+        />
+      )}
 
       {/* 历史版本面板 */}
       {showVersions && (
