@@ -129,9 +129,11 @@ export function buildMarkdown(report, hoursByProject) {
 const INLINE_STYLE = {
   h2: 'font-size:15px;font-weight:600;margin:16px 0 8px;color:#1e293b;',
   p: 'margin:6px 0;color:#334155;line-height:1.7;font-size:14px;',
-  table: 'border-collapse:collapse;font-size:13px;margin:8px 0 16px;',
-  th: 'background:#f1f5f9;padding:7px 10px;text-align:left;font-weight:600;color:#1e293b;border:1px solid #94a3b8;',
-  td: 'padding:7px 10px;color:#334155;border:1px solid #cbd5e1;vertical-align:top;',
+  table: 'border-collapse:collapse;font-size:12px;margin:8px 0 16px;',
+  // 表头：浅灰底 + 黑色加粗 14px；边框统一黑灰色；表头与单元格一律左对齐
+  th: 'background:#f2f2f2;padding:7px 10px;text-align:left;font-weight:bold;font-size:14px;color:#000000;border:1px solid #595959;',
+  // 单元格字号显式写死 12px：Word 等目标环境不总是从 table 继承字号
+  td: 'padding:7px 10px;text-align:left;font-size:12px;color:#333333;border:1px solid #595959;vertical-align:top;',
 };
 
 export function renderMarkdown(md, { inline = false } = {}) {
