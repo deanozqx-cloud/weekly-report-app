@@ -3,6 +3,7 @@ import { DEFAULT_PROVIDERS } from '../../lib/constants';
 import { uid } from '../../lib/utils';
 import { callAI } from '../../lib/ai';
 import { exportJson, exportExcel } from '../../lib/export';
+import { sbSendMail } from '../../lib/supabase';
 import { useIsMobile } from '../../lib/hooks';
 import SbUserSection from './SbUserSection';
 import AddProviderModal from './AddProviderModal';
@@ -33,6 +34,17 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
   const [testing, setTesting] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
   const [newRule, setNewRule] = useState('');
+  const [mailTest, setMailTest] = useState({ state: 'idle', msg: '' });
+
+  const runMailTest = async () => {
+    setMailTest({ state: 'testing', msg: '' });
+    try {
+      const r = await sbSendMail({ mode: 'test', subject: '周报助手 SMTP 测试' });
+      setMailTest({ state: 'ok', msg: `✓ 已发送测试邮件到 ${r?.to?.join('、') || '发件邮箱'}，请查收` });
+    } catch (e) {
+      setMailTest({ state: 'fail', msg: `✗ ${e.message}` });
+    }
+  };
   const [tplType, setTplType] = useState('half'); // 报告模板页签内：'half' | 'annual'
   const isMobile = useIsMobile();
 
@@ -397,6 +409,42 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
               <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-xs text-gray-500 space-y-1">
                 <p className="font-medium text-gray-600">云端存储结构（v2 分表）</p>
                 <p>数据按实体分表存储（工作记录 / 报告 / 版本历史 / 项目 / 里程碑 / 设置），增量同步，只传变更部分。首次使用需在 Supabase 控制台 → SQL Editor 执行仓库中的 <code className="bg-gray-100 rounded px-1">supabase/schema.sql</code>；应用会自动从旧结构迁移数据（旧表保留作备份）。</p>
+              </div>
+
+              <div className="border-t border-gray-100 pt-5">
+                <h3 className="font-medium text-gray-700 mb-1">邮件直发（SMTP）</h3>
+                <p className="text-xs text-gray-400 mb-3">
+                  配置后可在报告页点「发邮件」，预览确认后一键发出。
+                  <strong className="text-gray-500">邮箱凭据只存在服务端</strong>，不进浏览器、不进代码仓库。
+                </p>
+                <div className="bg-gray-50 border border-gray-200 rounded-lg px-4 py-3 text-xs text-gray-600 space-y-2 mb-3">
+                  <p className="font-medium text-gray-700">部署步骤（一次性）</p>
+                  <p>1. 部署函数：仓库根目录执行 <code className="bg-gray-100 rounded px-1">supabase functions deploy send-mail</code>（需先 <code className="bg-gray-100 rounded px-1">supabase login</code> 与 <code className="bg-gray-100 rounded px-1">supabase link</code>）</p>
+                  <p>2. 在 Supabase 控制台 → Edge Functions → send-mail → Secrets 配置：</p>
+                  <code className="block bg-gray-100 rounded px-2 py-1.5 font-mono leading-relaxed select-all">
+                    SMTP_HOST=mail.公司域名.com<br />
+                    SMTP_PORT=587<br />
+                    SMTP_USER=你的邮箱地址<br />
+                    SMTP_PASS=密码或客户端授权码<br />
+                    SMTP_FROM_NAME=你的姓名
+                  </code>
+                  <p className="text-gray-400">端口 465 用隐式 TLS，587 用 STARTTLS；如握手报错可加 <code className="bg-gray-100 rounded px-1">SMTP_TLS=implicit</code> 或 <code className="bg-gray-100 rounded px-1">starttls</code> 显式指定。</p>
+                </div>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <button
+                    onClick={runMailTest}
+                    disabled={mailTest.state === 'testing'}
+                    className="px-4 py-2 text-sm border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-50 disabled:opacity-50"
+                  >
+                    {mailTest.state === 'testing' ? '测试中…' : '发送测试邮件'}
+                  </button>
+                  <span className="text-xs text-gray-400">发一封测试邮件到发件邮箱本身，验证整条链路</span>
+                </div>
+                {mailTest.msg && (
+                  <div className={`mt-3 text-sm px-3 py-2 rounded-lg whitespace-pre-wrap ${mailTest.state === 'ok' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
+                    {mailTest.msg}
+                  </div>
+                )}
               </div>
 
               <div className="border-t border-gray-100 pt-5">

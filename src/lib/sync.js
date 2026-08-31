@@ -117,6 +117,7 @@ export function settingsToRows(userId, settings = {}) {
       defaultHours: settings.defaultHours ?? 8,
       progressOptions: settings.progressOptions || [],
       statusOptions: settings.statusOptions || [],
+      mail: settings.mail || {},
     },
   };
   return { projects, milestones, userSettings };
@@ -142,6 +143,7 @@ export function settingsFromRows({ projects = [], milestones = [], userSettings 
     if (prefs.defaultHours != null) frag.defaultHours = prefs.defaultHours;
     if (prefs.progressOptions?.length) frag.progressOptions = prefs.progressOptions;
     if (prefs.statusOptions?.length) frag.statusOptions = prefs.statusOptions;
+    if (prefs.mail) frag.mail = prefs.mail;
   }
   return frag;
 }

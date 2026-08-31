@@ -18,6 +18,26 @@ const chunk = (arr, n = 400) => {
   return out;
 };
 
+// 调用服务端邮件函数发信（SMTP 凭据只在 Edge Function 的环境变量里）
+export async function sbSendMail({ to, cc, subject, html, text, mode }) {
+  const { data, error } = await sb.functions.invoke('send-mail', {
+    body: { to, cc, subject, html, text, mode },
+  });
+  if (error) {
+    // functions.invoke 把非 2xx 包成 FunctionsHttpError，真正的原因在响应体里
+    let msg = error.message || '发送失败';
+    try {
+      const body = await error.context?.json?.();
+      if (body?.error) msg = [body.error, body.detail, body.hint].filter(Boolean).join('：');
+    } catch { /* 响应体不可解析时用原始 message */ }
+    if (/Failed to send a request|Function not found|404/i.test(msg)) {
+      msg = '未找到 send-mail 函数：请先在 Supabase 部署 Edge Function（见仓库 supabase/functions/send-mail）';
+    }
+    throw new Error(msg);
+  }
+  return data;
+}
+
 export async function sbUserId() {
   const { data: { user } } = await sb.auth.getUser();
   if (!user) throw new Error('未登录');
