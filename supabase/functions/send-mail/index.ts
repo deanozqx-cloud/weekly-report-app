@@ -2,14 +2,19 @@
 //
 // 凭据只存在本函数的环境变量里，不进前端、不进 Git。
 // 需要在 Supabase 控制台 → Edge Functions → send-mail → Secrets 配置：
-//   SMTP_HOST       必填，如 mail.example.com
+//   SMTP_HOST       必填，如 smtp.example.com
 //   SMTP_PORT       选填，默认 587
-//   SMTP_USER       必填，登录账号（通常是完整邮箱地址）
-//   SMTP_PASS       必填，密码或客户端授权码
+//   SMTP_USER       登录账号（通常是完整邮箱地址）；与 SMTP_PASS 同时提供才做认证
+//   SMTP_PASS       密码或客户端授权码
 //   SMTP_FROM       选填，发件地址，默认取 SMTP_USER
 //   SMTP_FROM_NAME  选填，发件人显示名
-//   SMTP_TLS        选填，implicit | starttls | auto（默认 auto：465 用 implicit，其余 starttls）
+//   SMTP_TLS        选填，implicit | starttls | none | auto（默认 auto：465 用 implicit，其余 starttls）
+//                   none = 全程明文，仅在服务器不支持加密时使用，凭据会明文传输
+//   SMTP_ALLOW_INSECURE  选填，'true' 时允许在未加密连接上发送凭据
 //   MAIL_ALLOWED_ORIGINS 选填，逗号分隔的前端来源白名单
+//
+// 注意：多数云平台（含本函数运行的 Deno Deploy）封禁出站 25 端口，
+// 请优先使用 587（STARTTLS）或 465（隐式 TLS）。
 //
 // 调用需带 Supabase 用户 JWT（函数默认开启 verify_jwt），未登录无法调用。
 import { SMTPClient } from 'https://deno.land/x/denomailer@1.6.0/mod.ts';
@@ -49,12 +54,12 @@ Deno.serve(async (req) => {
   if (req.method !== 'POST') return json({ error: '仅支持 POST' }, 405, origin);
 
   const host = Deno.env.get('SMTP_HOST');
-  const user = Deno.env.get('SMTP_USER');
-  const pass = Deno.env.get('SMTP_PASS');
-  if (!host || !user || !pass) {
+  const user = Deno.env.get('SMTP_USER') || '';
+  const pass = Deno.env.get('SMTP_PASS') || '';
+  if (!host || !(user || Deno.env.get('SMTP_FROM'))) {
     return json({
       error: '服务端未配置 SMTP',
-      detail: '请在 Supabase → Edge Functions → send-mail → Secrets 配置 SMTP_HOST / SMTP_USER / SMTP_PASS',
+      detail: '请在 Supabase → Edge Functions → send-mail → Secrets 配置 SMTP_HOST 与 SMTP_USER（或 SMTP_FROM）',
     }, 500, origin);
   }
 
@@ -84,17 +89,23 @@ Deno.serve(async (req) => {
   if (!html && !text && !isTest) return json({ error: '正文不能为空' }, 400, origin);
 
   const port = Number(Deno.env.get('SMTP_PORT') || 587);
+  // implicit：连接即加密（465）｜ starttls：明文握手后升级（587）｜ none：全程明文（部分自建服务器的 25 端口）
+  // auto：465 用 implicit，其余 starttls
   const tlsMode = (Deno.env.get('SMTP_TLS') || 'auto').toLowerCase();
-  // implicit TLS（465）连接即加密；starttls（587/25）先明文握手再升级，由 denomailer 自动完成
   const implicit = tlsMode === 'implicit' || (tlsMode === 'auto' && port === 465);
+  const plain = tlsMode === 'none';
+  // 明文连接下 denomailer 默认拒绝发送凭据，需显式放行
+  const allowUnsecure = plain || Deno.env.get('SMTP_ALLOW_INSECURE') === 'true';
 
   const client = new SMTPClient({
     connection: {
       hostname: host,
       port,
       tls: implicit,
-      auth: { username: user, password: pass },
+      // 账号密码都提供时才认证；部分内网服务器允许免认证转发
+      auth: user && pass ? { username: user, password: pass } : undefined,
     },
+    debug: { allowUnsecure, noStartTLS: plain },
   });
 
   try {
@@ -115,7 +126,8 @@ Deno.serve(async (req) => {
     let hint = '';
     if (/auth|535|534|password|credential/i.test(msg)) hint = '认证失败：确认账号与授权码；若服务器禁用基础认证则 SMTP 直发不可用';
     else if (/refus|timeout|connect|dns|unreach/i.test(msg)) hint = '连不上服务器：确认外网是否开放该端口（常见 587/465），以及主机名是否正确';
-    else if (/certificate|tls|ssl/i.test(msg)) hint = 'TLS 握手失败：尝试把 SMTP_TLS 改为 implicit（端口 465）或 starttls（端口 587）';
+    else if (/unsecure|insecure|starttls/i.test(msg)) hint = '服务器不支持加密：若确认要明文发送，设置 SMTP_TLS=none（注意凭据将明文传输）';
+    else if (/certificate|tls|ssl/i.test(msg)) hint = 'TLS 握手失败：尝试 SMTP_TLS=implicit（端口 465）或 starttls（端口 587）';
     else if (/relay|denied|not permitted|550|553/i.test(msg)) hint = '服务器拒绝转发：发件地址需与登录账号一致，或该账号无对外发信权限';
     return json({ error: '发送失败', detail: msg, hint }, 502, origin);
   }

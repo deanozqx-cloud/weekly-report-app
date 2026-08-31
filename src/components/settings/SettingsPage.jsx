@@ -428,7 +428,11 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
                     SMTP_PASS=密码或客户端授权码<br />
                     SMTP_FROM_NAME=你的姓名
                   </code>
-                  <p className="text-gray-400">端口 465 用隐式 TLS，587 用 STARTTLS；如握手报错可加 <code className="bg-gray-100 rounded px-1">SMTP_TLS=implicit</code> 或 <code className="bg-gray-100 rounded px-1">starttls</code> 显式指定。</p>
+                  <p className="text-gray-400">
+                    端口 465 用隐式 TLS、587 用 STARTTLS；握手报错可加 <code className="bg-gray-100 rounded px-1">SMTP_TLS=implicit</code> / <code className="bg-gray-100 rounded px-1">starttls</code> 显式指定。
+                    服务器完全不支持加密时用 <code className="bg-gray-100 rounded px-1">SMTP_TLS=none</code>（凭据将明文传输）。
+                    <strong className="text-amber-600">端口 25 通常被云平台封禁，请优先用 587 或 465。</strong>
+                  </p>
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
                   <button
