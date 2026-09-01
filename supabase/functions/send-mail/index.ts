@@ -53,10 +53,13 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders(origin) });
   if (req.method !== 'POST') return json({ error: '仅支持 POST' }, 405, origin);
 
-  const host = Deno.env.get('SMTP_HOST');
-  const user = Deno.env.get('SMTP_USER') || '';
+  // Secrets 多是从剪贴板粘进控制台的，容易带上首尾空白。
+  // 密码不裁：万一确实以空格结尾，静默裁掉会变成查不出来的认证失败；改为在报错时提示。
+  const env = (k: string) => (Deno.env.get(k) || '').trim();
+  const host = env('SMTP_HOST');
+  const user = env('SMTP_USER');
   const pass = Deno.env.get('SMTP_PASS') || '';
-  if (!host || !(user || Deno.env.get('SMTP_FROM'))) {
+  if (!host || !(user || env('SMTP_FROM'))) {
     return json({
       error: '服务端未配置 SMTP',
       detail: '请在 Supabase → Edge Functions → send-mail → Secrets 配置 SMTP_HOST 与 SMTP_USER（或 SMTP_FROM）',
@@ -77,8 +80,8 @@ Deno.serve(async (req) => {
   const text = String(payload.text || '');
   const isTest = payload.mode === 'test';
 
-  const from = Deno.env.get('SMTP_FROM') || user;
-  const fromName = Deno.env.get('SMTP_FROM_NAME') || '';
+  const from = env('SMTP_FROM') || user;
+  const fromName = env('SMTP_FROM_NAME');
 
   const recipients = isTest && to.length === 0 ? [from] : to;
   if (!recipients.length) return json({ error: '收件人不能为空' }, 400, origin);
@@ -88,14 +91,17 @@ Deno.serve(async (req) => {
   if (!subject && !isTest) return json({ error: '主题不能为空' }, 400, origin);
   if (!html && !text && !isTest) return json({ error: '正文不能为空' }, 400, origin);
 
-  const port = Number(Deno.env.get('SMTP_PORT') || 587);
+  const port = Number(env('SMTP_PORT') || 587);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    return json({ error: 'SMTP_PORT 不是合法端口号', detail: env('SMTP_PORT') }, 500, origin);
+  }
   // implicit：连接即加密（465）｜ starttls：明文握手后升级（587）｜ none：全程明文（部分自建服务器的 25 端口）
   // auto：465 用 implicit，其余 starttls
-  const tlsMode = (Deno.env.get('SMTP_TLS') || 'auto').toLowerCase();
+  const tlsMode = (env('SMTP_TLS') || 'auto').toLowerCase();
   const implicit = tlsMode === 'implicit' || (tlsMode === 'auto' && port === 465);
   const plain = tlsMode === 'none';
   // 明文连接下 denomailer 默认拒绝发送凭据，需显式放行
-  const allowUnsecure = plain || Deno.env.get('SMTP_ALLOW_INSECURE') === 'true';
+  const allowUnsecure = plain || env('SMTP_ALLOW_INSECURE') === 'true';
 
   const client = new SMTPClient({
     connection: {
@@ -124,7 +130,10 @@ Deno.serve(async (req) => {
     const msg = e instanceof Error ? e.message : String(e);
     // 常见故障给出可操作的排查方向
     let hint = '';
-    if (/auth|535|534|password|credential/i.test(msg)) hint = '认证失败：确认账号与授权码；若服务器禁用基础认证则 SMTP 直发不可用';
+    if (/auth|535|534|password|credential/i.test(msg)) {
+      hint = '认证失败：确认账号与授权码；若服务器禁用基础认证则 SMTP 直发不可用';
+      if (pass !== pass.trim()) hint += '。另注意 SMTP_PASS 首尾带有空白字符，多半是粘贴时带入的';
+    }
     else if (/refus|timeout|connect|dns|unreach/i.test(msg)) hint = '连不上服务器：确认外网是否开放该端口（常见 587/465），以及主机名是否正确';
     else if (/unsecure|insecure|starttls/i.test(msg)) hint = '服务器不支持加密：若确认要明文发送，设置 SMTP_TLS=none（注意凭据将明文传输）';
     // 证书类错误换端口无济于事，单独给出可操作的方向
