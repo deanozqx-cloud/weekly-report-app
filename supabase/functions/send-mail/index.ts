@@ -127,6 +127,10 @@ Deno.serve(async (req) => {
     if (/auth|535|534|password|credential/i.test(msg)) hint = '认证失败：确认账号与授权码；若服务器禁用基础认证则 SMTP 直发不可用';
     else if (/refus|timeout|connect|dns|unreach/i.test(msg)) hint = '连不上服务器：确认外网是否开放该端口（常见 587/465），以及主机名是否正确';
     else if (/unsecure|insecure|starttls/i.test(msg)) hint = '服务器不支持加密：若确认要明文发送，设置 SMTP_TLS=none（注意凭据将明文传输）';
+    // 证书类错误换端口无济于事，单独给出可操作的方向
+    else if (/NotValidForName|hostname|name mismatch/i.test(msg)) hint = `证书上的域名与 SMTP_HOST（${host}）不一致。用 openssl s_client -connect ${host}:${port} 查看证书实际签发的域名（CN / SAN），把 SMTP_HOST 改成那个名字`;
+    else if (/UnknownIssuer|self.?signed|unknown ca|untrusted/i.test(msg)) hint = '服务器用的是自签名或私有 CA 证书，运行环境不信任：需要服务器换成公共 CA 签发的证书';
+    else if (/expired|NotValidYet/i.test(msg)) hint = '服务器证书已过期或尚未生效：需要联系 IT 更新证书';
     else if (/certificate|tls|ssl/i.test(msg)) hint = 'TLS 握手失败：尝试 SMTP_TLS=implicit（端口 465）或 starttls（端口 587）';
     else if (/relay|denied|not permitted|550|553/i.test(msg)) hint = '服务器拒绝转发：发件地址需与登录账号一致，或该账号无对外发信权限';
     return json({ error: '发送失败', detail: msg, hint }, 502, origin);

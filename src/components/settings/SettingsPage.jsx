@@ -433,6 +433,11 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
                     服务器完全不支持加密时用 <code className="bg-gray-100 rounded px-1">SMTP_TLS=none</code>（凭据将明文传输）。
                     <strong className="text-amber-600">端口 25 通常被云平台封禁，请优先用 587 或 465。</strong>
                   </p>
+                  <p className="text-gray-400">
+                    若报「证书域名不匹配」，说明服务器证书签发给了别的域名——用
+                    <code className="bg-gray-100 rounded px-1 mx-1">openssl s_client -connect 主机:465</code>
+                    查看证书的 CN / SAN，把 SMTP_HOST 改成证书上的那个域名。
+                  </p>
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
                   <button
