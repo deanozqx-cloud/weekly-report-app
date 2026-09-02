@@ -20,7 +20,10 @@ export default function RecipientInput({ value = '', onChange, contacts = [], pl
   // 只有最后一个分隔符之后的片段参与联想，前面已填好的地址不受影响
   const sepIdx = Math.max(...SEPARATORS.map(s => value.lastIndexOf(s)));
   const token = value.slice(sepIdx + 1).trim();
-  const suggestions = matchContacts(contacts, token, { exclude: splitAddresses(value) });
+  // 排除的是「已经填完的」地址，不含正在输入的这一段——
+  // 否则框里预填着某个地址时，它会把自己从候选里排掉，下拉看起来是空的
+  const settled = splitAddresses(value.slice(0, sepIdx + 1));
+  const suggestions = matchContacts(contacts, token, { exclude: settled });
 
   // active 可能因输入变化而越界，取值时钳住，避免回车选到空项
   const idx = Math.min(active, Math.max(suggestions.length - 1, 0));
