@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { renderMarkdown } from '../../lib/markdown';
 import { sbSendMail } from '../../lib/supabase';
-import { fillSubject, DEFAULT_SUBJECT_TEMPLATE } from '../../lib/mail';
+import { fillSubject, DEFAULT_SUBJECT_TEMPLATE, mergeContacts, splitAddresses } from '../../lib/mail';
 import Modal from '../ui/Modal';
+import RecipientInput from '../ui/RecipientInput';
 
 export default function SendMailModal({ report, markdown, settings, setSettings, onClose }) {
   const saved = settings?.mail || {};
@@ -15,6 +16,7 @@ export default function SendMailModal({ report, markdown, settings, setSettings,
   const [status, setStatus] = useState('idle'); // idle | sending | sent
   const [error, setError] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const contacts = saved.contacts || [];
 
   const html = renderMarkdown(markdown, { inline: true });
 
@@ -23,10 +25,16 @@ export default function SendMailModal({ report, markdown, settings, setSettings,
     if (!subjectTouched) setSubject(fillSubject(tpl, report, name));
   };
 
+  // 发送成功后才记：没发出去的地址不进通讯录
   const persist = () => {
+    const used = [...splitAddresses(to), ...splitAddresses(cc)];
     setSettings(prev => ({
       ...prev,
-      mail: { ...(prev.mail || {}), to, cc, senderName, subjectTemplate: template },
+      mail: {
+        ...(prev.mail || {}),
+        to, cc, senderName, subjectTemplate: template,
+        contacts: mergeContacts(prev.mail?.contacts, used),
+      },
     }));
   };
 
@@ -53,20 +61,20 @@ export default function SendMailModal({ report, markdown, settings, setSettings,
         <div className="grid grid-cols-1 gap-3">
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">收件人 <span className="text-red-400">*</span> <span className="text-gray-400 font-normal">(多个用逗号分隔)</span></label>
-            <input
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-              placeholder="leader@company.com, hr@company.com"
+            <RecipientInput
               value={to}
-              onChange={e => setTo(e.target.value)}
+              onChange={setTo}
+              contacts={contacts}
+              placeholder="leader@company.com, hr@company.com"
             />
           </div>
           <div>
             <label className="block text-xs font-medium text-gray-500 mb-1">抄送 <span className="text-gray-400 font-normal">(可选)</span></label>
-            <input
-              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-              placeholder="colleague@company.com"
+            <RecipientInput
               value={cc}
-              onChange={e => setCc(e.target.value)}
+              onChange={setCc}
+              contacts={contacts}
+              placeholder="colleague@company.com"
             />
           </div>
           <div>
