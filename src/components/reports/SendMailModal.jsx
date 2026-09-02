@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import { renderMarkdown } from '../../lib/markdown';
 import { sbSendMail } from '../../lib/supabase';
-import { fillSubject, DEFAULT_SUBJECT_TEMPLATE, mergeContacts, splitAddresses } from '../../lib/mail';
+import { fillSubject, DEFAULT_SUBJECT_TEMPLATE, mergeContacts, splitAddresses, isEmail } from '../../lib/mail';
 import Modal from '../ui/Modal';
 import RecipientInput from '../ui/RecipientInput';
 
@@ -16,7 +16,17 @@ export default function SendMailModal({ report, markdown, settings, setSettings,
   const [status, setStatus] = useState('idle'); // idle | sending | sent
   const [error, setError] = useState('');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const contacts = saved.contacts || [];
+
+  // 通讯录建立之前发过的邮件没有留下记录，用上次的收件人/抄送补上，
+  // 这样老用户一打开就有候选，而不是等下一次发送才开始积累
+  const contacts = useMemo(() => {
+    const stored = saved.contacts || [];
+    const known = new Set(stored.map(c => c.email));
+    const legacy = [...splitAddresses(saved.to), ...splitAddresses(saved.cc)]
+      .map(s => s.toLowerCase())
+      .filter(e => isEmail(e) && !known.has(e));
+    return legacy.length ? mergeContacts(stored, legacy) : stored;
+  }, [saved.contacts, saved.to, saved.cc]);
 
   const html = renderMarkdown(markdown, { inline: true });
 
