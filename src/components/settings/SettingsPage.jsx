@@ -421,13 +421,17 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
                   <p className="font-medium text-gray-700">部署步骤（一次性）</p>
                   <p>1. 部署函数：仓库根目录执行 <code className="bg-gray-100 rounded px-1">supabase functions deploy send-mail</code>（需先 <code className="bg-gray-100 rounded px-1">supabase login</code> 与 <code className="bg-gray-100 rounded px-1">supabase link</code>）</p>
                   <p>2. 在 Supabase 控制台 → Edge Functions → send-mail → Secrets 配置：</p>
-                  <code className="block bg-gray-100 rounded px-2 py-1.5 font-mono leading-relaxed select-all">
-                    SMTP_HOST=mail.公司域名.com<br />
+                  <code className="block bg-gray-100 rounded px-2 py-1.5 font-mono leading-relaxed">
+                    SMTP_HOST=&lt;邮件服务器域名&gt;<br />
                     SMTP_PORT=587<br />
-                    SMTP_USER=你的邮箱地址<br />
-                    SMTP_PASS=密码或客户端授权码<br />
-                    SMTP_FROM_NAME=你的姓名
+                    SMTP_USER=&lt;完整邮箱地址&gt;<br />
+                    SMTP_PASS=&lt;密码或客户端授权码&gt;<br />
+                    SMTP_FROM_NAME=&lt;发件人显示名，选填&gt;
                   </code>
+                  <p className="text-gray-400">
+                    尖括号部分要换成你自己的值。<code className="bg-gray-100 rounded px-1">SMTP_FROM_NAME</code> 是收件人看到的发件人名字，
+                    <strong className="text-gray-500">不配置就显示邮箱地址</strong>。
+                  </p>
                   <p className="text-gray-400">
                     端口 465 用隐式 TLS、587 用 STARTTLS；握手报错可加 <code className="bg-gray-100 rounded px-1">SMTP_TLS=implicit</code> / <code className="bg-gray-100 rounded px-1">starttls</code> 显式指定。
                     服务器完全不支持加密时用 <code className="bg-gray-100 rounded px-1">SMTP_TLS=none</code>（凭据将明文传输）。
