@@ -3,7 +3,7 @@ import { DEFAULT_PROVIDERS, DEFAULT_PROGRESS_OPTIONS, PRIORITY_OPTIONS } from '.
 import { uid } from '../../lib/utils';
 import { callAI, distillStyleRules, refineReport } from '../../lib/ai';
 import { buildLongReportPrompt, buildWeeklyReportPrompt, pickChildReports, isLongType, LONG_TYPES } from '../../lib/prompts';
-import { buildMarkdown, parseMarkdownToReport, renderMarkdown } from '../../lib/markdown';
+import { buildMarkdown, parseMarkdownToReport, renderMarkdown, proseSections, docBlockOrder, HOURS_PER_DAY } from '../../lib/markdown';
 import { copyRichText, copyPlainText } from '../../lib/clipboard';
 import SendMailModal from './SendMailModal';
 import EditableSelect from '../ui/EditableSelect';
@@ -14,6 +14,10 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
   const [items, setItems] = useState(report.items || []);
   const [nextItems, setNextItems] = useState(report.nextItems || []);
   const [markdown, setMarkdown] = useState(report.markdown || '');
+  // 两张表之外的叙述小节，结构化模式下渲染成可编辑文本框
+  const [prose, setProse] = useState(() => proseSections(report.markdown || ''));
+  // 小节顺序（含两张表），结构化模式据此排版，与最终输出顺序一致
+  const [blockOrder, setBlockOrder] = useState(() => docBlockOrder(report.markdown || ''));
   const [mdMode, setMdMode] = useState(isLong);
   const [mdPreview, setMdPreview] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
@@ -54,6 +58,20 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     [report.type, settings?.reportSections],
   );
 
+  const proseMap = useMemo(
+    () => Object.fromEntries(prose.map(p => [p.heading, p.body])),
+    [prose],
+  );
+  const updateProse = (heading, body) => setProse(ps => ps.map(p => p.heading === heading ? { ...p, body } : p));
+
+  // 本周工作内容表的网格列宽：人天/占比为只读派生列，随开关增减
+  const itemGridCols = useMemo(() => [
+    '1fr', '2fr', '60px',
+    ...(reportSections.days ? ['52px'] : []),
+    ...(reportSections.share ? ['52px'] : []),
+    '1fr', '1fr', 'auto',
+  ].join(' '), [reportSections.days, reportSections.share]);
+
   // 下周计划表的网格列宽随开关增减，表头与数据行共用一份定义避免错位
   const nextGridCols = useMemo(() => [
     '1fr', '2fr',
@@ -63,7 +81,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
   ].join(' '), [reportSections.priority, reportSections.deliverable]);
 
   const handleSave = () => {
-    const md = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject, reportSections);
+    const md = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject, reportSections, proseMap);
     const parsed = mdMode ? parseMarkdownToReport(markdown) : { items, nextItems };
     const ver = { id: uid(), savedAt: new Date().toISOString(), label: '手动保存', markdown: md, items: parsed.items, nextItems: parsed.nextItems };
     const versions = [...(report.versions || []), ver].slice(-20);
@@ -80,7 +98,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
     }
   };
 
-  const currentMarkdown = () => (mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject, reportSections));
+  const currentMarkdown = () => (mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject, reportSections, proseMap));
 
   // 富文本复制：粘进企业微信/邮件/Word 时保留表格与排版
   const handleCopyRich = async () => {
@@ -150,7 +168,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
 
       const settingsCopy = { ...settings, llm: { ...settings.llm, default: providerOverride || selectedProvider } };
 
-      const preMd = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject, reportSections);
+      const preMd = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject, reportSections, proseMap);
       const preParsed = mdMode ? parseMarkdownToReport(markdown) : { items, nextItems };
       let baseVersions = report.versions || [];
       if (preMd || preParsed.items.length > 0) {
@@ -175,6 +193,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       });
 
       setMarkdown(result);
+      setProse(proseSections(result)); setBlockOrder(docBlockOrder(result));
       if (!isLong) { setItems(parsed.items); setNextItems(parsed.nextItems); }
       setMdMode(true);
     } catch (e) {
@@ -186,7 +205,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
 
   // AI 精修：对当前内容做一轮审稿（删套话、改具体），精修前自动快照
   const handleRefine = async () => {
-    const cur = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject, reportSections);
+    const cur = mdMode ? markdown : buildMarkdown({ ...report, items, nextItems }, hoursByProject, reportSections, proseMap);
     if (!cur.trim()) { setAiError('当前没有可精修的内容'); return; }
     setAiError('');
     setRefining(true);
@@ -211,6 +230,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       });
 
       setMarkdown(result);
+      setProse(proseSections(result)); setBlockOrder(docBlockOrder(result));
       if (!isLong) { setItems(parsedR.items); setNextItems(parsedR.nextItems); }
       setMdMode(true);
     } catch (e) {
@@ -246,6 +266,133 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       setWorkRecords(prev => [...prev, { id: uid(), date: report.weekEnd, project, content: '工时调整', hours: lastDayHours, createdAt: new Date().toISOString() }]);
     }
   };
+
+  // 两张表的 JSX 提为变量，按 blockOrder 插到正确位置
+  const itemsBlock = (
+    <>
+            {/* 本周工作内容 */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-gray-700 text-sm">本周工作内容</h4>
+                <button onClick={addItem} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1">
+                  <span>+</span> 添加行
+                </button>
+              </div>
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="grid bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 px-3 py-2" style={{gridTemplateColumns:itemGridCols}}>
+                  <span>项目</span><span>工作内容</span><span>本周工时</span>
+                  {reportSections.days && <span>人天</span>}
+                  {reportSections.share && <span>占比</span>}
+                  <span>项目进度</span><span>备注</span><span></span>
+                </div>
+                {(totalWeekHours > 0 || tableHours > 0) && (
+                  <div className="grid items-center px-3 py-2 gap-2 bg-blue-50 border-b border-blue-100 text-xs font-medium text-blue-700" style={{gridTemplateColumns:itemGridCols}}>
+                    <span>本周合计</span>
+                    <span>
+                      {hiddenHours > 0 && (
+                        <span className="font-normal text-amber-600" title="该周期的工作记录中，有部分项目未出现在下方表格里（可能被 AI 合并或漏掉了项目行）。可添加对应项目行将其计入，或忽略此提示。">
+                          ⚠ 另有 {hiddenHours}h 记录未列入表格（记录总计 {totalWeekHours}h）
+                        </span>
+                      )}
+                    </span>
+                    <span className="font-bold">{tableHours}h</span>
+                    {reportSections.days && <span className="font-bold">{(tableHours / HOURS_PER_DAY).toFixed(1)}</span>}
+                    {reportSections.share && <span></span>}
+                    <span></span><span></span><span></span>
+                  </div>
+                )}
+                {items.map((it, idx) => (
+                  <div key={it.id} className={`grid items-center px-3 py-2 gap-2 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`} style={{gridTemplateColumns:itemGridCols}}>
+                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.project} onChange={e => updateItem(it.id, 'project', e.target.value)} placeholder="项目名" />
+                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.content} onChange={e => updateItem(it.id, 'content', e.target.value)} placeholder="工作内容" />
+                    <input
+                      type="number" min="0" step="0.5"
+                      className="w-full border border-blue-200 rounded px-1 py-1 text-xs text-blue-700 font-medium text-center focus:outline-none focus:ring-1 focus:ring-blue-400 bg-blue-50"
+                      value={hoursDraft[it.project] ?? (hoursByProject[it.project] ?? '')}
+                      placeholder="0"
+                      title="输入后回车或移开焦点生效"
+                      onChange={e => setHoursDraft(d => ({ ...d, [it.project]: e.target.value }))}
+                      onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                      onBlur={e => {
+                        // 失焦才提交：输入过程不写记录，避免过程值（如输入"12"时的"1"）
+                        // 被当成目标工时写入；空值/非法值直接还原为计算值，不做任何修改
+                        const v = parseFloat(e.target.value);
+                        if (!isNaN(v) && v >= 0 && it.project) handleHoursChange(it.project, v);
+                        setHoursDraft(d => { const c = { ...d }; delete c[it.project]; return c; });
+                      }}
+                    />
+                    {reportSections.days && (
+                      <span className="text-xs text-gray-400 text-center tabular-nums" title="工时 ÷ 7.5，由工时自动计算">
+                        {hoursByProject[it.project] != null ? (hoursByProject[it.project] / HOURS_PER_DAY).toFixed(1) : '—'}
+                      </span>
+                    )}
+                    {reportSections.share && (
+                      <span className="text-xs text-gray-400 text-center tabular-nums" title="占本周表内总工时的比例，由工时自动计算">
+                        {hoursByProject[it.project] != null && tableHours > 0
+                          ? `${Math.round((hoursByProject[it.project] / tableHours) * 100)}%`
+                          : '—'}
+                      </span>
+                    )}
+                    <EditableSelect
+                      value={it.progress || '开发中'}
+                      options={settings.progressOptions || DEFAULT_PROGRESS_OPTIONS}
+                      onChange={v => {
+                        updateItem(it.id, 'progress', v);
+                        // 与汇总页的项目进度双向同步：这里改了，汇总页与后续生成的报告一并生效
+                        if (it.project) setSettings(prev => ({ ...prev, projectStatuses: { ...(prev.projectStatuses || {}), [it.project]: v } }));
+                      }}
+                      onAddOption={v => setSettings(prev => ({ ...prev, progressOptions: [...(prev.progressOptions || DEFAULT_PROGRESS_OPTIONS), v] }))}
+                    />
+                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.note||''} onChange={e => updateItem(it.id, 'note', e.target.value)} placeholder="备注" />
+                    <button onClick={() => removeItem(it.id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">&times;</button>
+                  </div>
+                ))}
+                {items.length === 0 && <div className="text-center text-gray-300 text-sm py-4">暂无数据</div>}
+              </div>
+            </div>
+
+    </>
+  );
+  const nextBlock = (
+    <>
+            {/* 下周工作计划 */}
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <h4 className="font-semibold text-gray-700 text-sm">下周工作计划</h4>
+                <button onClick={addNextItem} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1">
+                  <span>+</span> 添加行
+                </button>
+              </div>
+              <div className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="grid bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 px-3 py-2" style={{gridTemplateColumns:nextGridCols}}>
+                  <span>项目</span><span>工作内容</span>
+                  {reportSections.priority && <span>优先级</span>}
+                  {reportSections.deliverable && <span>交付物</span>}
+                  <span></span>
+                </div>
+                {nextItems.map((it, idx) => (
+                  <div key={it.id} className={`grid items-center px-3 py-2 gap-2 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`} style={{gridTemplateColumns:nextGridCols}}>
+                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.project} onChange={e => updateNextItem(it.id, 'project', e.target.value)} placeholder="项目名" />
+                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.content} onChange={e => updateNextItem(it.id, 'content', e.target.value)} placeholder="下周计划" />
+                    {reportSections.priority && (
+                      <EditableSelect
+                        value={it.priority || ''}
+                        options={PRIORITY_OPTIONS}
+                        onChange={v => updateNextItem(it.id, 'priority', v)}
+                      />
+                    )}
+                    {reportSections.deliverable && (
+                      <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.deliverable || ''} onChange={e => updateNextItem(it.id, 'deliverable', e.target.value)} placeholder="预期交付物" />
+                    )}
+                    <button onClick={() => removeNextItem(it.id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">&times;</button>
+                  </div>
+                ))}
+                {nextItems.length === 0 && <div className="text-center text-gray-300 text-sm py-4">暂无数据</div>}
+              </div>
+            </div>
+    </>
+  );
+
 
   // 新建报告自动触发 AI 生成：挂载时执行一次（父组件 key 保证每份新生成的报告都会重挂载）。
   // 延迟到下一拍执行，避免在 effect 中同步 setState；卸载时取消
@@ -312,7 +459,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
           {!isLong && (
             <div className="flex bg-gray-50 border border-gray-200 rounded-lg overflow-hidden text-xs h-8">
               <button onClick={() => { setMdMode(false); setMdPreview(false); }} className={`px-3 h-full transition-colors ${!mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>结构化</button>
-              <button onClick={() => { if (!mdMode) setMarkdown(buildMarkdown({ ...report, items, nextItems }, hoursByProject, reportSections)); setMdMode(true); }} className={`px-3 h-full transition-colors ${mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Markdown</button>
+              <button onClick={() => { if (!mdMode) setMarkdown(buildMarkdown({ ...report, items, nextItems }, hoursByProject, reportSections, proseMap)); setMdMode(true); }} className={`px-3 h-full transition-colors ${mdMode ? 'bg-blue-600 text-white' : 'text-gray-500 hover:bg-gray-100'}`}>Markdown</button>
             </div>
           )}
           <button
@@ -374,109 +521,32 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
               className="w-full border border-gray-200 rounded-lg p-4 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-blue-300"
               style={{minHeight:'500px'}}
               value={markdown}
-              onChange={e => { setMarkdown(e.target.value); const p = parseMarkdownToReport(e.target.value); setItems(p.items); setNextItems(p.nextItems); }}
+              onChange={e => { setMarkdown(e.target.value); setProse(proseSections(e.target.value)); setBlockOrder(docBlockOrder(e.target.value)); const p = parseMarkdownToReport(e.target.value); setItems(p.items); setNextItems(p.nextItems); }}
             />
           )
         ) : (
           <>
-            {/* 本周工作内容 */}
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="font-semibold text-gray-700 text-sm">本周工作内容</h4>
-                <button onClick={addItem} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1">
-                  <span>+</span> 添加行
-                </button>
-              </div>
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
-                <div className="grid bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 px-3 py-2" style={{gridTemplateColumns:'1fr 2fr 60px 1fr 1fr auto'}}>
-                  <span>项目</span><span>工作内容</span><span>本周工时</span><span>项目进度</span><span>备注</span><span></span>
+            {/* 按原文小节顺序渲染：编辑器里看到的顺序即最终输出顺序 */}
+            {blockOrder.map(heading => {
+              if (heading === '本周工作内容') return <div key={heading}>{itemsBlock}</div>;
+              if (heading === '下周工作计划') return <div key={heading}>{nextBlock}</div>;
+              const sec = prose.find(p => p.heading === heading);
+              if (!sec) return null;
+              return (
+                <div key={heading}>
+                  <div className="flex items-center justify-between mb-3">
+                    <h4 className="font-semibold text-gray-700 text-sm">{sec.heading}</h4>
+                    <span className="text-xs text-gray-300">清空内容即从周报中移除该板块</span>
+                  </div>
+                  <textarea
+                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-300"
+                    rows={Math.min(10, Math.max(3, sec.body.split('\n').length + 1))}
+                    value={sec.body}
+                    onChange={e => updateProse(sec.heading, e.target.value)}
+                  />
                 </div>
-                {(totalWeekHours > 0 || tableHours > 0) && (
-                  <div className="grid items-center px-3 py-2 gap-2 bg-blue-50 border-b border-blue-100 text-xs font-medium text-blue-700" style={{gridTemplateColumns:'1fr 2fr 60px 1fr 1fr auto'}}>
-                    <span>本周合计</span>
-                    <span>
-                      {hiddenHours > 0 && (
-                        <span className="font-normal text-amber-600" title="该周期的工作记录中，有部分项目未出现在下方表格里（可能被 AI 合并或漏掉了项目行）。可添加对应项目行将其计入，或忽略此提示。">
-                          ⚠ 另有 {hiddenHours}h 记录未列入表格（记录总计 {totalWeekHours}h）
-                        </span>
-                      )}
-                    </span>
-                    <span className="font-bold">{tableHours}h</span><span></span><span></span><span></span>
-                  </div>
-                )}
-                {items.map((it, idx) => (
-                  <div key={it.id} className={`grid items-center px-3 py-2 gap-2 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`} style={{gridTemplateColumns:'1fr 2fr 60px 1fr 1fr auto'}}>
-                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.project} onChange={e => updateItem(it.id, 'project', e.target.value)} placeholder="项目名" />
-                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.content} onChange={e => updateItem(it.id, 'content', e.target.value)} placeholder="工作内容" />
-                    <input
-                      type="number" min="0" step="0.5"
-                      className="w-full border border-blue-200 rounded px-1 py-1 text-xs text-blue-700 font-medium text-center focus:outline-none focus:ring-1 focus:ring-blue-400 bg-blue-50"
-                      value={hoursDraft[it.project] ?? (hoursByProject[it.project] ?? '')}
-                      placeholder="0"
-                      title="输入后回车或移开焦点生效"
-                      onChange={e => setHoursDraft(d => ({ ...d, [it.project]: e.target.value }))}
-                      onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
-                      onBlur={e => {
-                        // 失焦才提交：输入过程不写记录，避免过程值（如输入"12"时的"1"）
-                        // 被当成目标工时写入；空值/非法值直接还原为计算值，不做任何修改
-                        const v = parseFloat(e.target.value);
-                        if (!isNaN(v) && v >= 0 && it.project) handleHoursChange(it.project, v);
-                        setHoursDraft(d => { const c = { ...d }; delete c[it.project]; return c; });
-                      }}
-                    />
-                    <EditableSelect
-                      value={it.progress || '开发中'}
-                      options={settings.progressOptions || DEFAULT_PROGRESS_OPTIONS}
-                      onChange={v => {
-                        updateItem(it.id, 'progress', v);
-                        // 与汇总页的项目进度双向同步：这里改了，汇总页与后续生成的报告一并生效
-                        if (it.project) setSettings(prev => ({ ...prev, projectStatuses: { ...(prev.projectStatuses || {}), [it.project]: v } }));
-                      }}
-                      onAddOption={v => setSettings(prev => ({ ...prev, progressOptions: [...(prev.progressOptions || DEFAULT_PROGRESS_OPTIONS), v] }))}
-                    />
-                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.note||''} onChange={e => updateItem(it.id, 'note', e.target.value)} placeholder="备注" />
-                    <button onClick={() => removeItem(it.id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">&times;</button>
-                  </div>
-                ))}
-                {items.length === 0 && <div className="text-center text-gray-300 text-sm py-4">暂无数据</div>}
-              </div>
-            </div>
-
-            {/* 下周工作计划 */}
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <h4 className="font-semibold text-gray-700 text-sm">下周工作计划</h4>
-                <button onClick={addNextItem} className="text-xs text-blue-600 hover:text-blue-700 flex items-center gap-1">
-                  <span>+</span> 添加行
-                </button>
-              </div>
-              <div className="border border-gray-200 rounded-lg overflow-hidden">
-                <div className="grid bg-gray-50 border-b border-gray-200 text-xs font-medium text-gray-500 px-3 py-2" style={{gridTemplateColumns:nextGridCols}}>
-                  <span>项目</span><span>工作内容</span>
-                  {reportSections.priority && <span>优先级</span>}
-                  {reportSections.deliverable && <span>交付物</span>}
-                  <span></span>
-                </div>
-                {nextItems.map((it, idx) => (
-                  <div key={it.id} className={`grid items-center px-3 py-2 gap-2 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}`} style={{gridTemplateColumns:nextGridCols}}>
-                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.project} onChange={e => updateNextItem(it.id, 'project', e.target.value)} placeholder="项目名" />
-                    <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.content} onChange={e => updateNextItem(it.id, 'content', e.target.value)} placeholder="下周计划" />
-                    {reportSections.priority && (
-                      <EditableSelect
-                        value={it.priority || ''}
-                        options={PRIORITY_OPTIONS}
-                        onChange={v => updateNextItem(it.id, 'priority', v)}
-                      />
-                    )}
-                    {reportSections.deliverable && (
-                      <input className="border border-gray-200 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-300" value={it.deliverable || ''} onChange={e => updateNextItem(it.id, 'deliverable', e.target.value)} placeholder="预期交付物" />
-                    )}
-                    <button onClick={() => removeNextItem(it.id)} className="text-gray-300 hover:text-red-400 text-lg leading-none">&times;</button>
-                  </div>
-                ))}
-                {nextItems.length === 0 && <div className="text-center text-gray-300 text-sm py-4">暂无数据</div>}
-              </div>
-            </div>
+              );
+            })}
           </>
         )}
       </div>
@@ -510,6 +580,8 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
                       setItems(previewVersion.items || []);
                       setNextItems(previewVersion.nextItems || []);
                       setMarkdown(previewVersion.markdown || '');
+                      setProse(proseSections(previewVersion.markdown || ''));
+                      setBlockOrder(docBlockOrder(previewVersion.markdown || ''));
                       setMdMode(isLong);
                       setShowVersions(false);
                       setPreviewVersion(null);
