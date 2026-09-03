@@ -21,6 +21,164 @@ export function qualityBlock(styleRules = []) {
   return block;
 }
 
+// 范文注入长度上限（字符），避免撑爆上下文
+export const SAMPLE_CHAR_LIMIT = 8000;
+
+// ─────────────────────────────────────────
+// 周报板块与列：设置页逐项开关，说明文案同时用于 UI 与 prompt
+// ─────────────────────────────────────────
+export const WEEKLY_SECTIONS = [
+  { key: 'overview', name: '本周概览', desc: '开头一段整体叙述：工时投向、重点推进了什么、整体节奏' },
+  { key: 'outcomes', name: '关键成果与产出', desc: '从每日记录的「成果/产出」字段提炼，没有成果记录时整段省略' },
+  { key: 'risks', name: '问题与风险', desc: '仅提炼工作内容里有明确依据的卡点，没有依据时整段省略' },
+];
+
+export const WEEKLY_COLUMNS = [
+  { key: 'days', name: '人天', desc: '工作内容表增加「人天」列（工时 ÷ 7.5）' },
+  { key: 'share', name: '占比', desc: '工作内容表增加「占比」列（占本周总工时的百分比）' },
+  { key: 'priority', name: '优先级', desc: '下周计划表增加「优先级」列' },
+  { key: 'deliverable', name: '交付物', desc: '下周计划表增加「交付物」列' },
+];
+
+// 生成周报正文时追加的板块要求。sections 为空对象时退回原来的两表结构
+function weeklySectionRules(sections = {}) {
+  const rules = [];
+  if (sections.overview) {
+    rules.push(`- 在问候语之后、"本周工作内容"表格之前，插入 "## 本周概览" 小节：用 2-4 句话说明本周工时主要投向哪些项目、重点推进了什么、整体处于什么节奏。只陈述上方材料里有的事实`);
+  }
+  if (sections.outcomes) {
+    rules.push(`- 在"本周工作内容"表格之后，插入 "## 关键成果与产出" 小节，列表形式。内容只能来自每日明细中标注了「成果：」的记录，逐条写清交付了什么、达到什么效果。若本周没有任何成果记录，整个小节省略不输出`);
+  }
+  if (sections.risks) {
+    rules.push(`- 在"关键成果与产出"之后，插入 "## 问题与风险" 小节，列表形式。**只允许写工作内容里有明确文字依据的**卡点（例如记录中出现"卡在""等××方""阻塞""延期""待确认"等表述），每条注明涉及项目与影响。**严禁凭空推测或为凑内容编造风险**；若本周记录中找不到任何此类依据，整个小节省略不输出`);
+  }
+  return rules;
+}
+
+// 本周工作内容表的列定义（随开关增减），供 prompt 与兜底模板共用
+export function weeklyTableColumns(sections = {}) {
+  return [
+    '项目', '工时',
+    ...(sections.days ? ['人天'] : []),
+    ...(sections.share ? ['占比'] : []),
+    '工作内容', '项目进度', '备注',
+  ];
+}
+
+export function weeklyNextColumns(sections = {}) {
+  return [
+    '项目', '工作内容',
+    ...(sections.priority ? ['优先级'] : []),
+    ...(sections.deliverable ? ['交付物'] : []),
+  ];
+}
+
+// 构建周报生成 prompt。
+// template: { sample, instructions }，配置范文后按范文结构生成，否则用默认表格结构
+export function buildWeeklyReportPrompt({
+  range, pastReports = [], styleRules = [], weekRecords = [], items = [],
+  hoursByProject = {}, maintainedStatuses = {}, sections = {}, template, extraMaterial,
+}) {
+  const sample = (template?.sample || '').trim();
+  const useSample = !!sample;
+  let prompt = `你是工作周报助手。请根据本周工作记录生成一份专业的中文工作周报。\n\n`;
+
+  if (useSample) {
+    const truncated = sample.length > SAMPLE_CHAR_LIMIT;
+    prompt += `【格式范文（公司要求的周报样例，请严格模仿其结构、章节划分、篇幅比例和行文风格）】\n`;
+    prompt += truncated ? sample.slice(0, SAMPLE_CHAR_LIMIT) + '\n……（范文过长已截断，请以以上部分的结构为准）' : sample;
+    prompt += `\n\n`;
+    if ((template?.instructions || '').trim()) {
+      prompt += `【格式补充说明（必须遵守）】\n${template.instructions.trim()}\n\n`;
+    }
+  } else if (pastReports.length) {
+    // 未配置范文时，用历史周报兜底传递公司写法
+    prompt += `【公司周报风格参考 - 请严格模仿以下示例的措辞和表述习惯】\n`;
+    pastReports.slice(0, 2).forEach((r, i) => {
+      prompt += `\n=== 示例${i + 1}（${r.range}周）===\n${r.markdown}\n`;
+    });
+    prompt += `\n`;
+  }
+
+  // 风格画像已沉淀为规则时注入规则（见 qualityBlock）；冷启动无规则时退回注入最近的修正对比原文
+  if (!styleRules.length) {
+    const corrections = pastReports.filter(r => r.aiGenerated && r.aiGenerated !== r.markdown).slice(0, 3);
+    if (corrections.length) {
+      prompt += `【历史修正记录 - 以下是AI生成后用户修改的内容，请学习用户偏好避免重犯】\n`;
+      corrections.forEach((r, i) => {
+        prompt += `\n修正${i + 1}（${r.range}周）：\nAI生成：\n${r.aiGenerated}\n用户修改为：\n${r.markdown}\n`;
+      });
+      prompt += `\n`;
+    }
+  }
+
+  const lastReport = pastReports[0];
+  if (lastReport) {
+    prompt += `【上周项目状态参考 - 帮助你理解各项目当前所处阶段】\n`;
+    (lastReport.items || []).forEach(it => {
+      prompt += `- 项目「${it.project}」上周状态：${it.progress}，内容：${it.content}\n`;
+    });
+    prompt += `\n`;
+  }
+
+  const dailyLines = weekRecords
+    .slice().sort((a, b) => a.date.localeCompare(b.date) || a.project.localeCompare(b.project))
+    .map(r => `- ${r.date} 项目「${r.project}」：${r.content}${r.outcome ? `（成果：${r.outcome}）` : ''}（${r.hours}h）`)
+    .join('\n');
+  prompt += `【本周每日工作明细（主要输入，请以此为准整理周报）】\n${dailyLines || '（本周无工作记录）'}\n\n`;
+
+  if (items.length) {
+    prompt += `【当前周报草稿（供参考）】\n`;
+    prompt += items.map(it => `- 项目「${it.project}」：${it.content}，进度：${it.progress}`).join('\n');
+    prompt += `\n\n`;
+  }
+
+  const totalHours = Object.values(hoursByProject).reduce((s, h) => s + (h || 0), 0);
+  const hoursLines = Object.entries(hoursByProject)
+    .sort((a, b) => b[1] - a[1])
+    .map(([p, h]) => {
+      const extra = [
+        sections.days ? `${(h / 7.5).toFixed(1)}人天` : '',
+        sections.share && totalHours > 0 ? `占比${Math.round((h / totalHours) * 100)}%` : '',
+      ].filter(Boolean).join('，');
+      return `- 项目「${p}」：${h}h${extra ? `（${extra}）` : ''}`;
+    })
+    .join('\n');
+  if (hoursLines) prompt += `【本周各项目工时汇总${totalHours ? `（合计 ${totalHours}h）` : ''}】\n${hoursLines}\n\n`;
+
+  // 汇总页人工维护的项目进度：优先级最高，AI 必须原样采用；未维护的项目才由 AI 根据工作内容判断
+  const weekProjects = [...new Set(weekRecords.map(r => r.project))];
+  const statusLines = weekProjects.filter(p => maintainedStatuses[p]).map(p => `- 项目「${p}」：${maintainedStatuses[p]}`).join('\n');
+  if (statusLines) prompt += `【项目进度（人工维护，${useSample ? '表述进度时以此为准' : '必须原样填入"项目进度"列'}，不要改写）】\n${statusLines}\n\n`;
+
+  if ((extraMaterial || '').trim()) {
+    prompt += `【补充资料（用户提供的额外背景/数据/要求，请充分利用）】\n${extraMaterial.trim()}\n\n`;
+  }
+
+  prompt += qualityBlock(styleRules);
+
+  if (useSample) {
+    prompt += `
+要求：
+1. 全文严格按【格式范文】的结构、章节划分、篇幅比例和行文风格组织；范文中的具体事实、数据、项目名一律不得照抄，内容只能来自上方材料
+2. 报告周期为 ${range}；开头问候语与范文保持一致，若范文没有问候语则加上：您好：\n\n本周(${range})的工作总结具体如下，请查收。
+3. 人工维护的项目进度必须原样使用，不要改写
+4. 有数据写数据；材料中没有的不要编造，尤其不要为凑篇幅虚构风险或成果
+5. 只输出Markdown内容，不要其他说明`;
+  } else {
+    const sectionRules = weeklySectionRules(sections);
+    prompt += `
+要求：
+1. 开头加上：您好：\n\n本周(${range})的工作总结具体如下，请查收。
+2. 生成"本周工作内容"表格，列：${weeklyTableColumns(sections).join(' | ')}（工时填写实际工时，如"9h"${sections.days ? '；人天 = 工时 ÷ 7.5，保留一位小数' : ''}${sections.share ? '；占比用上方汇总给出的百分比' : ''}）
+3. "项目进度"列：上方【项目进度（人工维护）】中给出的项目必须原样使用给定值；未给出的项目根据本周工作内容判断（如：需求中/开发中/测试中/已上线/已完成）
+4. 生成"下周工作计划"表格，列：${weeklyNextColumns(sections).join(' | ')}（根据本周进展和项目目标合理推测，用户会自行修改${sections.priority ? '；优先级用 高/中/低' : ''}${sections.deliverable ? '；交付物写具体可验收的产出物' : ''}）
+${sectionRules.length ? sectionRules.join('\n') + '\n' : ''}${sectionRules.length ? 6 : 5}. 只输出Markdown内容，不要其他说明`;
+  }
+
+  return prompt;
+}
+
 // ─────────────────────────────────────────
 // 长周期报告类型配置（月报/季报/半年报/年报）
 // 分层汇总：每级报告优先以下一级已审校的报告为输入，逐级递归
@@ -55,9 +213,6 @@ export function pickChildReports(allReports, type, start, end) {
   }
   return { tierLabel: '', reports: [] };
 }
-
-// 范文注入长度上限（字符），避免撑爆上下文
-export const SAMPLE_CHAR_LIMIT = 8000;
 
 // 构建长周期报告生成 prompt（月报/季报/半年报/年报通用）。
 // template: { sample, instructions }（仅半年报/年报开放，配置范文后按范文格式生成，否则用默认表格格式）

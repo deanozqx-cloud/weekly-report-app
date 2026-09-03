@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { DEFAULT_PROVIDERS } from '../../lib/constants';
+import { DEFAULT_PROVIDERS, defaultSettings } from '../../lib/constants';
+import { WEEKLY_SECTIONS, WEEKLY_COLUMNS } from '../../lib/prompts';
 import { uid } from '../../lib/utils';
 import { callAI } from '../../lib/ai';
 import { exportJson, exportExcel } from '../../lib/export';
@@ -45,10 +46,15 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
       setMailTest({ state: 'fail', msg: `✗ ${e.message}` });
     }
   };
-  const [tplType, setTplType] = useState('half'); // 报告模板页签内：'half' | 'annual'
+  const [tplType, setTplType] = useState('weekly'); // 报告模板页签内：'weekly' | 'half' | 'annual'
   const isMobile = useIsMobile();
 
-  const TPL_NAMES = { half: '半年报', annual: '年报' };
+  const TPL_NAMES = { weekly: '周报', half: '半年报', annual: '年报' };
+  const sectionCfg = settings.reportSections || defaultSettings.reportSections;
+  const updateSection = (key, val) => setSettings(prev => ({
+    ...prev,
+    reportSections: { ...(prev.reportSections || defaultSettings.reportSections), [key]: val },
+  }));
   const tpl = settings.reportTemplates?.[tplType] || { sample: '', instructions: '' };
   const updateTemplate = (field, val) => {
     setSettings(prev => ({
@@ -318,12 +324,12 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
             <div className="fade-in">
               <h3 className="font-semibold text-gray-800">报告模板</h3>
               <p className="text-xs text-gray-400 mt-0.5 mb-4">
-                为半年报/年报配置格式范文：粘贴一篇往期报告，AI 生成时会严格模仿其结构、篇幅与文风（长文本格式）。<strong className="text-gray-500">配置了才生效</strong>，不配置则使用默认表格格式。
+                粘贴一篇公司要求的报告样例，AI 生成时会严格模仿其结构、篇幅与文风。<strong className="text-gray-500">配置了才生效</strong>，不配置则使用默认结构（周报为表格 + 下方勾选的板块）。
               </p>
 
               {/* 类型切换 */}
               <div className="flex gap-1 mb-4 bg-gray-100 rounded-lg p-1 w-fit">
-                {['half', 'annual'].map(t => {
+                {['weekly', 'half', 'annual'].map(t => {
                   const configured = !!(settings.reportTemplates?.[t]?.sample || '').trim();
                   return (
                     <button
@@ -373,6 +379,60 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
                     className="px-3 py-1.5 text-sm text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg"
                   >清空{TPL_NAMES[tplType]}模板</button>
                 )}
+              </div>
+
+              {/* 周报板块与列开关 */}
+              <div className="border-t border-gray-100 mt-8 pt-6">
+                <h3 className="font-semibold text-gray-800">周报板块与列</h3>
+                <p className="text-xs text-gray-400 mt-0.5 mb-4">
+                  控制默认结构下周报生成哪些内容。<strong className="text-gray-500">配置了周报范文时以范文为准</strong>，这里的开关不生效。
+                </p>
+
+                <div className="space-y-5">
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 mb-2">额外板块</p>
+                    <div className="space-y-2">
+                      {WEEKLY_SECTIONS.map(s => (
+                        <label key={s.key} className="flex items-start gap-3 px-3 py-2.5 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 accent-blue-600"
+                            checked={!!sectionCfg[s.key]}
+                            onChange={e => updateSection(s.key, e.target.checked)}
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm text-gray-700 font-medium">{s.name}</span>
+                            <span className="block text-xs text-gray-400 mt-0.5">{s.desc}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-medium text-gray-500 mb-2">表格列</p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                      {WEEKLY_COLUMNS.map(c => (
+                        <label key={c.key} className="flex items-start gap-3 px-3 py-2.5 border border-gray-200 rounded-lg hover:bg-gray-50 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            className="mt-0.5 accent-blue-600"
+                            checked={!!sectionCfg[c.key]}
+                            onChange={e => updateSection(c.key, e.target.checked)}
+                          />
+                          <span className="min-w-0">
+                            <span className="block text-sm text-gray-700 font-medium">{c.name}</span>
+                            <span className="block text-xs text-gray-400 mt-0.5">{c.desc}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                <p className="text-xs text-gray-400 mt-4">
+                  关掉某一列只影响之后生成或重新排版的报告，已保存的报告不会被改动。
+                </p>
               </div>
             </div>
           )}
