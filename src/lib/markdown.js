@@ -6,7 +6,7 @@ export function escapeCell(s) {
   return String(s ?? '').replace(/\r?\n/g, ' ').replace(/\|/g, '\\|');
 }
 
-export function generateReportFromRecords(weekStart, records, weekEnd, projectStatuses) {
+export function generateReportFromRecords(weekStart, records, weekEnd, projectStatuses, sections) {
   weekEnd = weekEnd || getSunday(weekStart);
   const range = getCustomRange(weekStart, weekEnd);
 
@@ -33,25 +33,63 @@ export function generateReportFromRecords(weekStart, records, weekEnd, projectSt
     id: uid(),
     project: it.project,
     content: '',
+    priority: '',
+    deliverable: '',
   }));
 
   let md = `您好：\n\n本周(${range})的工作总结具体如下，请查收。\n\n`;
-  md += buildMarkdownTable(items, hoursByProject);
-  md += `\n## 下周工作计划\n\n`;
-  md += `| 项目 | 工作内容 |\n|------|----------|\n`;
-  nextItems.forEach(it => {
-    md += `| ${escapeCell(it.project)} | ${escapeCell(it.content)} |\n`;
-  });
+  md += buildMarkdownTable(items, hoursByProject, sections);
+  md += `\n${buildNextTable(nextItems, sections)}`;
 
   return { items, nextItems, markdown: md, weekStart, weekEnd, range };
 }
 
-export function buildMarkdownTable(items, hoursByProject) {
+// 一个人天按 7.5 小时折算，与项目汇总页口径一致
+export const HOURS_PER_DAY = 7.5;
+
+export function buildMarkdownTable(items, hoursByProject, sections = {}) {
+  const hours = hoursByProject || {};
+  const total = Object.values(hours).reduce((s, h) => s + (h || 0), 0);
+  const head = [
+    '项目', '工时',
+    ...(sections.days ? ['人天'] : []),
+    ...(sections.share ? ['占比'] : []),
+    '工作内容', '项目进度', '备注',
+  ];
   let md = `## 本周工作内容\n\n`;
-  md += `| 项目 | 工时 | 工作内容 | 项目进度 | 备注 |\n|------|------|----------|----------|------|\n`;
+  md += `| ${head.join(' | ')} |\n|${head.map(() => '------').join('|')}|\n`;
   items.forEach(it => {
-    const h = hoursByProject && hoursByProject[it.project] != null ? `${hoursByProject[it.project]}h` : '';
-    md += `| ${escapeCell(it.project)} | ${h} | ${escapeCell(it.content)} | ${escapeCell(it.progress)} | ${escapeCell(it.note)} |\n`;
+    const h = hours[it.project];
+    const cells = [
+      escapeCell(it.project),
+      h != null ? `${h}h` : '',
+      ...(sections.days ? [h != null ? (h / HOURS_PER_DAY).toFixed(1) : ''] : []),
+      ...(sections.share ? [h != null && total > 0 ? `${Math.round((h / total) * 100)}%` : ''] : []),
+      escapeCell(it.content),
+      escapeCell(it.progress),
+      escapeCell(it.note),
+    ];
+    md += `| ${cells.join(' | ')} |\n`;
+  });
+  return md;
+}
+
+export function buildNextTable(nextItems, sections = {}) {
+  const head = [
+    '项目', '工作内容',
+    ...(sections.priority ? ['优先级'] : []),
+    ...(sections.deliverable ? ['交付物'] : []),
+  ];
+  let md = `## 下周工作计划\n\n`;
+  md += `| ${head.join(' | ')} |\n|${head.map(() => '------').join('|')}|\n`;
+  (nextItems || []).forEach(it => {
+    const cells = [
+      escapeCell(it.project),
+      escapeCell(it.content),
+      ...(sections.priority ? [escapeCell(it.priority)] : []),
+      ...(sections.deliverable ? [escapeCell(it.deliverable)] : []),
+    ];
+    md += `| ${cells.join(' | ')} |\n`;
   });
   return md;
 }
@@ -76,52 +114,123 @@ export function splitTableRow(line) {
 // 是否为表头分隔行，如 | --- | :---: |
 export const isTableSeparator = (line) => /^\|?[\s\-:|]+\|?$/.test(line.trim()) && line.includes('-');
 
+// 表格列名 → 字段。列是可配置的（人天/占比/优先级/交付物按开关增减），
+// 因此按列名定位而非固定下标，加列、换序、旧格式都能正确读回。
+const COL_ALIASES = {
+  project:     ['项目名称', '项目'],
+  hours:       ['工时'],
+  days:        ['人天'],
+  share:       ['占比'],
+  content:     ['工作内容', '主要进展', '工作计划', '内容'],
+  progress:    ['项目进度', '项目状态', '进度'],
+  note:        ['备注'],
+  priority:    ['优先级'],
+  deliverable: ['预期交付', '交付物'],
+};
+
+// 长别名优先，否则 '项目进度' 会被 '项目' 抢先匹配掉
+const ALIAS_INDEX = Object.entries(COL_ALIASES)
+  .flatMap(([field, list]) => list.map(alias => ({ field, alias })))
+  .sort((a, b) => b.alias.length - a.alias.length);
+
+export function mapColumns(headerCells) {
+  const map = {};
+  headerCells.forEach((cell, i) => {
+    const hit = ALIAS_INDEX.find(x => cell.includes(x.alias));
+    if (hit && map[hit.field] == null) map[hit.field] = i;
+  });
+  return map;
+}
+
+// 表头一个列名都没认出来时的兜底，沿用改造前的位置约定
+const FALLBACK_COLS = {
+  current: { project: 0, content: 1, progress: 2, note: 3 },
+  next:    { project: 0, content: 1 },
+};
+
 export function parseMarkdownToReport(md) {
   const items = [];
   const nextItems = [];
-  const lines = md.split('\n');
+  const lines = String(md || '').split('\n');
   let section = '';
-  let hasHoursCol = false;
-  let headerSeen = false; // 每个 section 内第一个表格行视为表头（不能用 includes('项目') 判断，项目名含"项目"二字的数据行会被误判）
+  let cols = null; // 当前小节表格的列映射，每节第一个表格行是表头
   for (const line of lines) {
-    if (line.includes('本周工作内容')) { section = 'current'; headerSeen = false; continue; }
-    if (line.includes('下周工作计划')) { section = 'next'; headerSeen = false; continue; }
+    if (line.includes('本周工作内容')) { section = 'current'; cols = null; continue; }
+    if (line.includes('下周工作计划')) { section = 'next'; cols = null; continue; }
     if (!section || !line.trim().startsWith('|')) continue;
     if (isTableSeparator(line)) continue;
-    if (!headerSeen) {
-      // 表头行：本周表检测是否含工时列
-      if (section === 'current') hasHoursCol = line.includes('工时');
-      headerSeen = true;
+    const cells = splitTableRow(line);
+    if (!cols) {
+      const mapped = mapColumns(cells);
+      cols = (mapped.project == null && mapped.content == null) ? FALLBACK_COLS[section] : mapped;
       continue;
     }
-    const cols = splitTableRow(line);
-    if (!cols.some(c => c)) continue; // 全空行跳过
+    if (!cells.some(c => c)) continue; // 全空行跳过
+    const at = k => (cols[k] != null ? (cells[cols[k]] || '') : '');
     if (section === 'current') {
-      if (hasHoursCol) {
-        // 新格式：项目 | 工时 | 工作内容 | 项目进度 | 备注
-        items.push({ id: uid(), project: cols[0]||'', content: cols[2]||'', progress: cols[3]||'开发中', note: cols[4]||'' });
-      } else {
-        // 旧格式：项目 | 工作内容 | 项目进度 | 备注
-        items.push({ id: uid(), project: cols[0]||'', content: cols[1]||'', progress: cols[2]||'开发中', note: cols[3]||'' });
-      }
+      items.push({
+        id: uid(),
+        project: at('project') || cells[0] || '',
+        content: at('content'),
+        progress: at('progress') || '开发中',
+        note: at('note'),
+      });
     } else {
       // 下周计划：内容可为空（模板默认生成空内容行，不能丢弃）
-      nextItems.push({ id: uid(), project: cols[0]||'', content: cols[1]||'' });
+      nextItems.push({
+        id: uid(),
+        project: at('project') || cells[0] || '',
+        content: at('content'),
+        priority: at('priority'),
+        deliverable: at('deliverable'),
+      });
     }
   }
   return { items, nextItems };
 }
 
-export function buildMarkdown(report, hoursByProject) {
-  const range = report.range || getWeekRange(report.weekStart);
-  let md = `您好：\n\n本周(${range})的工作总结具体如下，请查收。\n\n`;
-  md += buildMarkdownTable(report.items || [], hoursByProject || {});
-  md += `\n## 下周工作计划\n\n`;
-  md += `| 项目 | 工作内容 |\n|------|----------|\n`;
-  (report.nextItems||[]).forEach(it => {
-    md += `| ${escapeCell(it.project)} | ${escapeCell(it.content)} |\n`;
+// 把 Markdown 拆成前言 + 若干 ## 小节，保留原始顺序
+export function splitSections(md) {
+  const preamble = [];
+  const sections = [];
+  let cur = null;
+  String(md || '').split('\n').forEach(line => {
+    if (line.startsWith('## ')) {
+      if (cur) sections.push(cur);
+      cur = { heading: line.slice(3).trim(), lines: [] };
+    } else if (cur) cur.lines.push(line);
+    else preamble.push(line);
   });
-  return md;
+  if (cur) sections.push(cur);
+  return { preamble: preamble.join('\n').trim(), sections };
+}
+
+const TABLE_HEADINGS = ['本周工作内容', '下周工作计划'];
+
+// 结构化模式回写 Markdown：只重建两张表所在的小节，其余小节原样保留。
+// 本周概览/关键成果/问题与风险，以及范文产出的任意自定义小节，
+// 都不会在「结构化 ↔ Markdown」来回切换中被抹掉。
+export function buildMarkdown(report, hoursByProject, sections = {}) {
+  const range = report.range || getWeekRange(report.weekStart);
+  const parsed = splitSections(report.markdown || '');
+  const rebuilt = {
+    '本周工作内容': buildMarkdownTable(report.items || [], hoursByProject || {}, sections).trimEnd(),
+    '下周工作计划': buildNextTable(report.nextItems || [], sections).trimEnd(),
+  };
+  const out = [parsed.preamble || `您好：\n\n本周(${range})的工作总结具体如下，请查收。`];
+  const used = new Set();
+  parsed.sections.forEach(sec => {
+    const key = TABLE_HEADINGS.find(h => sec.heading.includes(h));
+    if (key) {
+      if (used.has(key)) return; // 重复小节只保留第一处，避免表格被写两遍
+      out.push(rebuilt[key]);
+      used.add(key);
+    } else {
+      out.push(`## ${sec.heading}\n${sec.lines.join('\n').replace(/\s+$/, '')}`);
+    }
+  });
+  TABLE_HEADINGS.forEach(h => { if (!used.has(h)) out.push(rebuilt[h]); });
+  return out.join('\n\n') + '\n';
 }
 
 // 富文本复制用的内联样式：粘贴到企业微信/邮件/Word 时不会带上应用的 CSS，

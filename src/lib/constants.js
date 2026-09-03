@@ -55,6 +55,9 @@ export const DEFAULT_PROVIDERS = [
 export const DEFAULT_PROGRESS_OPTIONS = ['前期方案', '需求中', '开发中', '测试中', '已上线', '已完成'];
 export const DEFAULT_STATUS_OPTIONS   = ['前期方案', '需求中', '开发中', '测试中', '已上线', '已完成'];
 
+// 下周计划的优先级选项
+export const PRIORITY_OPTIONS = ['高', '中', '低'];
+
 export const defaultSettings = {
   llm: { default: 'deepseek', providers: DEFAULT_PROVIDERS },
   defaultHours: 8,
@@ -67,8 +70,18 @@ export const defaultSettings = {
   projectProfiles: {},
   // 里程碑/关键成果记录：[{ id, date, project, title, metric }]
   milestones: [],
-  // 报告范文（仅半年报/年报开放）：{ half|annual: { sample, instructions } }，配置范文后按范文格式生成
+  // 报告范文：{ weekly|half|annual: { sample, instructions } }，配置范文后按范文格式生成
   reportTemplates: {},
+  // 周报板块与列开关：公司对详略的要求会变，逐项可关，不写死在 prompt 里
+  reportSections: {
+    overview: true,     // 本周概览（叙述段）
+    outcomes: true,     // 关键成果与产出
+    risks: true,        // 问题与风险
+    days: true,         // 工作内容表增加「人天」列
+    share: true,        // 工作内容表增加「占比」列
+    priority: true,     // 下周计划表增加「优先级」列
+    deliverable: true,  // 下周计划表增加「交付物」列
+  },
   // 邮件发送：收件人/抄送/主题模板与发件人显示名（SMTP 凭据在服务端，不存这里）
   // contacts 是发送成功后累积的收件人通讯录：[{ email, count, lastUsedAt }]
   mail: { to: '', cc: '', subjectTemplate: '{类型}-{姓名}-{周期}', senderName: '', contacts: [] },
