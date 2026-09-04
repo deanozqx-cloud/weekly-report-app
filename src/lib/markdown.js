@@ -207,10 +207,38 @@ export function splitSections(md) {
 
 const TABLE_HEADINGS = ['本周工作内容', '下周工作计划'];
 
+export const isTableHeading = (heading) => TABLE_HEADINGS.some(h => String(heading).includes(h));
+
+// 取出 Markdown 里两张表之外的叙述小节（本周概览/关键成果/问题与风险，
+// 以及范文产出的自定义小节），供结构化模式渲染成可编辑文本框
+export function proseSections(md) {
+  return splitSections(md).sections
+    .filter(sec => !isTableHeading(sec.heading))
+    .map(sec => ({ heading: sec.heading, body: sec.lines.join('\n').trim() }));
+}
+
+// 小节在原文中的顺序（含两张表），结构化模式据此排版，
+// 使编辑器里看到的顺序与实际输出一致。缺失的表补在末尾。
+export function docBlockOrder(md) {
+  const seen = new Set();
+  const order = [];
+  splitSections(md).sections.forEach(sec => {
+    // 表格小节按规范名去重（标题可能带前缀），叙述小节按标题本身去重
+    const key = TABLE_HEADINGS.find(t => sec.heading.includes(t)) || sec.heading;
+    if (seen.has(key)) return;
+    seen.add(key);
+    order.push(key);
+  });
+  TABLE_HEADINGS.forEach(t => { if (!seen.has(t)) order.push(t); });
+  return order;
+}
+
 // 结构化模式回写 Markdown：只重建两张表所在的小节，其余小节原样保留。
 // 本周概览/关键成果/问题与风险，以及范文产出的任意自定义小节，
 // 都不会在「结构化 ↔ Markdown」来回切换中被抹掉。
-export function buildMarkdown(report, hoursByProject, sections = {}) {
+// prose：结构化模式下用户编辑过的叙述小节 { 小节标题: 正文 }，覆盖 report.markdown 里的原文。
+// 正文被清空的叙述小节整节丢弃——这也是在结构化模式下删掉一个板块的方式。
+export function buildMarkdown(report, hoursByProject, sections = {}, prose = null) {
   const range = report.range || getWeekRange(report.weekStart);
   const parsed = splitSections(report.markdown || '');
   const rebuilt = {
@@ -226,7 +254,9 @@ export function buildMarkdown(report, hoursByProject, sections = {}) {
       out.push(rebuilt[key]);
       used.add(key);
     } else {
-      out.push(`## ${sec.heading}\n${sec.lines.join('\n').replace(/\s+$/, '')}`);
+      const edited = prose && Object.prototype.hasOwnProperty.call(prose, sec.heading);
+      const body = String(edited ? prose[sec.heading] : sec.lines.join('\n')).replace(/\s+$/, '');
+      if (body.trim()) out.push(`## ${sec.heading}\n${body}`);
     }
   });
   TABLE_HEADINGS.forEach(h => { if (!used.has(h)) out.push(rebuilt[h]); });
