@@ -151,6 +151,20 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
         const aiHoursByProject = {};
         weekRecords.forEach(r => { aiHoursByProject[r.project] = (aiHoursByProject[r.project] || 0) + r.hours; });
 
+        // 领导要看的是项目全景：汇总页维护过进度或档案的项目，加上本周有记录的，
+        // 本周没动的项目也要出现在报告里
+        const statuses = settings?.projectStatuses || {};
+        const profiles = settings?.projectProfiles || {};
+        const activeProjects = new Set(weekRecords.map(r => r.project).filter(Boolean));
+        const allProjects = [...new Set([...Object.keys(statuses), ...Object.keys(profiles), ...activeProjects])]
+          .filter(Boolean)
+          .map(name => ({ name, progress: statuses[name] || '', active: activeProjects.has(name) }))
+          // 本周有投入的排前面，便于 AI 判断轻重
+          .sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name));
+        const weekMilestones = (settings?.milestones || [])
+          .filter(m => m.date >= report.weekStart && m.date <= report.weekEnd)
+          .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
         prompt = buildWeeklyReportPrompt({
           range: report.range,
           pastReports,
@@ -158,8 +172,11 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
           weekRecords,
           items,
           hoursByProject: aiHoursByProject,
-          maintainedStatuses: settings?.projectStatuses || {},
+          maintainedStatuses: statuses,
           sections: reportSections,
+          allProjects,
+          milestones: weekMilestones,
+          profiles,
           // 范文配置了才生效；未配置时退回用历史周报传递公司写法
           template: settings?.reportTemplates?.weekly,
           extraMaterial: report.extraMaterial || '',
