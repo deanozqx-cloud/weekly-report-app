@@ -225,6 +225,44 @@ export function proseSections(md) {
   ];
 }
 
+// ── 文本块内的表格 ──
+// 叙述小节（含开头块）里可能夹着表格，范文格式尤其如此。结构化模式下
+// 把它们拆成「文字段落 / 表格」交替的序列，表格给出网格控件而非裸 Markdown。
+
+// 行数组 → Markdown 表格。列数不齐时按最宽行补空，避免生成破损表格
+export function tableRowsToMarkdown(rows) {
+  const grid = (rows || []).filter(r => Array.isArray(r));
+  if (!grid.length) return '';
+  const width = Math.max(1, ...grid.map(r => r.length));
+  const pad = r => [...r, ...Array(Math.max(0, width - r.length)).fill('')].map(escapeCell);
+  const [head, ...body] = grid;
+  return [
+    `| ${pad(head).join(' | ')} |`,
+    `|${Array(width).fill('------').join('|')}|`,
+    ...body.map(r => `| ${pad(r).join(' | ')} |`),
+  ].join('\n');
+}
+
+export function splitContentBlocks(text) {
+  const groups = [];
+  let cur = null;
+  String(text || '').split('\n').forEach(line => {
+    const kind = line.trim().startsWith('|') ? 'table' : 'text';
+    if (!cur || cur.kind !== kind) { cur = { kind, lines: [] }; groups.push(cur); }
+    cur.lines.push(line);
+  });
+  return groups.map(g => g.kind === 'table'
+    // 分隔行不进数据，回写时按列数重新生成
+    ? { kind: 'table', rows: g.lines.filter(l => !isTableSeparator(l)).map(splitTableRow) }
+    : { kind: 'text', text: g.lines.join('\n') });
+}
+
+export function joinContentBlocks(blocks) {
+  return (blocks || [])
+    .map(b => (b.kind === 'table' ? tableRowsToMarkdown(b.rows) : b.text))
+    .join('\n');
+}
+
 // 小节在原文中的顺序（含两张表），结构化模式据此排版，
 // 使编辑器里看到的顺序与实际输出一致。缺失的表补在末尾。
 export function docBlockOrder(md) {
