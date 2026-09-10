@@ -3,7 +3,7 @@ import { DEFAULT_PROVIDERS, DEFAULT_PROGRESS_OPTIONS, PRIORITY_OPTIONS } from '.
 import { uid } from '../../lib/utils';
 import { callAI, distillStyleRules, refineReport } from '../../lib/ai';
 import { buildLongReportPrompt, buildWeeklyReportPrompt, pickChildReports, isLongType, LONG_TYPES } from '../../lib/prompts';
-import { buildMarkdown, parseMarkdownToReport, renderMarkdown, proseSections, docBlockOrder, HOURS_PER_DAY } from '../../lib/markdown';
+import { buildMarkdown, parseMarkdownToReport, renderMarkdown, proseSections, docBlockOrder, PREAMBLE_KEY, HOURS_PER_DAY } from '../../lib/markdown';
 import { copyRichText, copyPlainText } from '../../lib/clipboard';
 import { richPasteHandler } from '../../lib/paste';
 import SendMailModal from './SendMailModal';
@@ -546,20 +546,33 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
         ) : (
           <>
             {/* 按原文小节顺序渲染：编辑器里看到的顺序即最终输出顺序 */}
+            {/* 用自定义结构（如范文格式）生成的周报不含这两张标准表，
+                此时结构化视图只能提供整块文本编辑，提示切到 Markdown 更顺手 */}
+            {!items.length && !nextItems.length && (
+              <div className="bg-amber-50 border border-amber-200 text-amber-700 text-xs px-4 py-2.5 rounded-lg">
+                这份周报没有「本周工作内容」「下周工作计划」两张标准表格（用范文格式生成时很正常）。
+                下方文本块可以直接编辑，改动排版建议切到 <strong>Markdown</strong> 模式。
+              </div>
+            )}
             {blockOrder.map(heading => {
               if (heading === '本周工作内容') return <div key={heading}>{itemsBlock}</div>;
               if (heading === '下周工作计划') return <div key={heading}>{nextBlock}</div>;
               const sec = prose.find(p => p.heading === heading);
               if (!sec) return null;
+              const isPreamble = heading === PREAMBLE_KEY;
+              // 开头块在范文结构下会承载整篇正文，给足高度
+              if (isPreamble && !sec.body.trim()) return null;
               return (
                 <div key={heading}>
                   <div className="flex items-center justify-between mb-3">
-                    <h4 className="font-semibold text-gray-700 text-sm">{sec.heading}</h4>
-                    <span className="text-xs text-gray-300">清空内容即从周报中移除该板块</span>
+                    <h4 className="font-semibold text-gray-700 text-sm">{isPreamble ? '开头' : sec.heading}</h4>
+                    <span className="text-xs text-gray-300">
+                      {isPreamble ? '问候语与两张表之前的内容' : '清空内容即从周报中移除该板块'}
+                    </span>
                   </div>
                   <textarea
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-300"
-                    rows={Math.min(10, Math.max(3, sec.body.split('\n').length + 1))}
+                    rows={Math.min(isPreamble ? 30 : 10, Math.max(3, sec.body.split('\n').length + 1))}
                     value={sec.body}
                     onChange={e => updateProse(sec.heading, e.target.value)}
                   />

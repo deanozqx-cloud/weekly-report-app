@@ -209,12 +209,20 @@ const TABLE_HEADINGS = ['本周工作内容', '下周工作计划'];
 
 export const isTableHeading = (heading) => TABLE_HEADINGS.some(h => String(heading).includes(h));
 
-// 取出 Markdown 里两张表之外的叙述小节（本周概览/关键成果/问题与风险，
-// 以及范文产出的自定义小节），供结构化模式渲染成可编辑文本框
+// 第一个 ## 之前的内容（问候语，或范文用「一、二、」这类非 ## 标题时的整篇正文）。
+// 用保留键参与小节列表，否则结构化模式渲染不到它。
+export const PREAMBLE_KEY = '__preamble__';
+
+// 取出 Markdown 里两张表之外的可编辑文本块：开头 + 叙述小节
+//（本周概览/关键成果/问题与风险，以及范文产出的自定义小节）
 export function proseSections(md) {
-  return splitSections(md).sections
-    .filter(sec => !isTableHeading(sec.heading))
-    .map(sec => ({ heading: sec.heading, body: sec.lines.join('\n').trim() }));
+  const { preamble, sections } = splitSections(md);
+  return [
+    { heading: PREAMBLE_KEY, body: preamble },
+    ...sections
+      .filter(sec => !isTableHeading(sec.heading))
+      .map(sec => ({ heading: sec.heading, body: sec.lines.join('\n').trim() })),
+  ];
 }
 
 // 小节在原文中的顺序（含两张表），结构化模式据此排版，
@@ -230,7 +238,7 @@ export function docBlockOrder(md) {
     order.push(key);
   });
   TABLE_HEADINGS.forEach(t => { if (!seen.has(t)) order.push(t); });
-  return order;
+  return [PREAMBLE_KEY, ...order];
 }
 
 // 结构化模式回写 Markdown：只重建两张表所在的小节，其余小节原样保留。
@@ -245,7 +253,11 @@ export function buildMarkdown(report, hoursByProject, sections = {}, prose = nul
     '本周工作内容': buildMarkdownTable(report.items || [], hoursByProject || {}, sections).trimEnd(),
     '下周工作计划': buildNextTable(report.nextItems || [], sections).trimEnd(),
   };
-  const out = [parsed.preamble || `您好：\n\n本周(${range})的工作总结具体如下，请查收。`];
+  const editedHead = prose && Object.prototype.hasOwnProperty.call(prose, PREAMBLE_KEY);
+  const head = editedHead
+    ? String(prose[PREAMBLE_KEY]).replace(/\s+$/, '')
+    : (parsed.preamble || `您好：\n\n本周(${range})的工作总结具体如下，请查收。`);
+  const out = head.trim() ? [head] : [];
   const used = new Set();
   parsed.sections.forEach(sec => {
     const key = TABLE_HEADINGS.find(h => sec.heading.includes(h));
