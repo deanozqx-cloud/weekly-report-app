@@ -5,6 +5,7 @@ import { callAI, distillStyleRules, refineReport } from '../../lib/ai';
 import { buildLongReportPrompt, buildWeeklyReportPrompt, pickChildReports, isLongType, LONG_TYPES } from '../../lib/prompts';
 import { buildMarkdown, parseMarkdownToReport, renderMarkdown, proseSections, docBlockOrder, HOURS_PER_DAY } from '../../lib/markdown';
 import { copyRichText, copyPlainText } from '../../lib/clipboard';
+import { richPasteHandler } from '../../lib/paste';
 import SendMailModal from './SendMailModal';
 import EditableSelect from '../ui/EditableSelect';
 
@@ -539,6 +540,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
               style={{minHeight:'500px'}}
               value={markdown}
               onChange={e => { setMarkdown(e.target.value); setProse(proseSections(e.target.value)); setBlockOrder(docBlockOrder(e.target.value)); const p = parseMarkdownToReport(e.target.value); setItems(p.items); setNextItems(p.nextItems); }}
+              onPaste={richPasteHandler}
             />
           )
         ) : (

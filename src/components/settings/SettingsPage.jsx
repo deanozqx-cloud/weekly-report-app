@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { DEFAULT_PROVIDERS, defaultSettings } from '../../lib/constants';
 import { WEEKLY_SECTIONS, WEEKLY_COLUMNS } from '../../lib/prompts';
+import { richPasteHandler } from '../../lib/paste';
 import { uid } from '../../lib/utils';
 import { callAI } from '../../lib/ai';
 import { exportJson, exportExcel } from '../../lib/export';
@@ -358,7 +359,12 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
                     placeholder={`把往年的${TPL_NAMES[tplType]}整篇粘贴到这里。\nAI 会模仿它的章节划分、篇幅比例和行文风格，但不会照抄其中的事实和数据。`}
                     value={tpl.sample}
                     onChange={e => updateTemplate('sample', e.target.value)}
+                    onPaste={richPasteHandler}
                   />
+                  <p className="text-xs text-gray-400 mt-1">
+                    从 Word / 企业微信 / OA / 邮件直接 ⌘V 粘贴即可，<strong className="text-gray-500">表格会自动转成 Markdown</strong>，不用手动改写。
+                    合并单元格无法在 Markdown 中表达，会按最宽的行补空格，粘完扫一眼即可。
+                  </p>
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-gray-500 mb-1">格式补充说明（可选）</label>
@@ -368,6 +374,7 @@ export default function SettingsPage({ settings, setSettings, currentUser, syncS
                     placeholder={'额外的格式要求，如：\n分「总体回顾 / 重点项目 / 团队协作 / 明年规划」四部分，每部分 300-500 字，不用表格'}
                     value={tpl.instructions}
                     onChange={e => updateTemplate('instructions', e.target.value)}
+                    onPaste={richPasteHandler}
                   />
                 </div>
                 {(tpl.sample || tpl.instructions) && (
