@@ -40,14 +40,18 @@ export const WEEKLY_COLUMNS = [
   { key: 'deliverable', name: '交付物', desc: '下周计划表增加「交付物」列' },
 ];
 
-// 生成周报正文时追加的板块要求。sections 为空对象时退回原来的两表结构
-function weeklySectionRules(sections = {}) {
+// 生成周报正文时追加的板块要求。sections 为空对象时退回原来的两表结构。
+// hasLastPlan 为真时额外要求对照上周计划说明偏差
+function weeklySectionRules(sections = {}, hasLastPlan = false) {
   const rules = [];
+  if (hasLastPlan) {
+    rules.push(`- "本周工作内容"的叙述要对照【上周制定的本周计划】：按计划完成的正常陈述结果；**未达成或方向有变的必须写明"原计划……实际……"及原因**（如依赖外部方进度、优先级调整）。计划与实际一致时不要为凑字数硬加对比`);
+  }
   if (sections.overview) {
-    rules.push(`- 在问候语之后、"本周工作内容"表格之前，插入 "## 本周概览" 小节：用 2-4 句话说明本周工时主要投向哪些项目、重点推进了什么、整体处于什么节奏。只陈述上方材料里有的事实`);
+    rules.push(`- 在问候语之后、"本周工作内容"表格之前，插入 "## 本周概览" 小节：用 2-4 句话说明在管项目共几个、本周核心投入哪几个、取得哪些关键进展。有【本周里程碑】时按事件类型归并成"X 个项目上线、X 个提测、X 个完成需求梳理"这样的摘要。只陈述上方材料里有的事实`);
   }
   if (sections.outcomes) {
-    rules.push(`- 在"本周工作内容"表格之后，插入 "## 关键成果与产出" 小节，列表形式。内容只能来自每日明细中标注了「成果：」的记录，逐条写清交付了什么、达到什么效果。若本周没有任何成果记录，整个小节省略不输出`);
+    rules.push(`- 在"本周工作内容"表格之后，插入 "## 关键成果与产出" 小节，列表形式。内容来自【本周里程碑】与每日明细中标注了「成果：」的记录，逐条写清交付了什么、达到什么效果；里程碑必须完整体现，不得遗漏。若两者都没有，整个小节省略不输出`);
   }
   if (sections.risks) {
     rules.push(`- 在"关键成果与产出"之后，插入 "## 问题与风险" 小节，列表形式。**只允许写工作内容里有明确文字依据的**卡点（例如记录中出现"卡在""等××方""阻塞""延期""待确认"等表述），每条注明涉及项目与影响。**严禁凭空推测或为凑内容编造风险**；若本周记录中找不到任何此类依据，整个小节省略不输出`);
@@ -77,7 +81,8 @@ export function weeklyNextColumns(sections = {}) {
 // template: { sample, instructions }，配置范文后按范文结构生成，否则用默认表格结构
 export function buildWeeklyReportPrompt({
   range, pastReports = [], styleRules = [], weekRecords = [], items = [],
-  hoursByProject = {}, maintainedStatuses = {}, sections = {}, template, extraMaterial,
+  hoursByProject = {}, maintainedStatuses = {}, sections = {},
+  allProjects = [], milestones = [], profiles = {}, template, extraMaterial,
 }) {
   const sample = (template?.sample || '').trim();
   const useSample = !!sample;
@@ -112,6 +117,7 @@ export function buildWeeklyReportPrompt({
     }
   }
 
+  let hasLastPlan = false;
   const lastReport = pastReports[0];
   if (lastReport) {
     prompt += `【上周项目状态参考 - 帮助你理解各项目当前所处阶段】\n`;
@@ -119,6 +125,16 @@ export function buildWeeklyReportPrompt({
       prompt += `- 项目「${it.project}」上周状态：${it.progress}，内容：${it.content}\n`;
     });
     prompt += `\n`;
+    const planned = (lastReport.nextItems || []).filter(it => it.project && it.content);
+    if (planned.length) {
+      hasLastPlan = true;
+      prompt += `【上周制定的本周计划（用于对照实际进展说明达成情况与偏差）】\n`;
+      planned.forEach(it => {
+        const tail = [it.priority && `优先级${it.priority}`, it.deliverable && `交付物：${it.deliverable}`].filter(Boolean).join('，');
+        prompt += `- 项目「${it.project}」：${it.content}${tail ? `（${tail}）` : ''}\n`;
+      });
+      prompt += `\n`;
+    }
   }
 
   const dailyLines = weekRecords
@@ -132,6 +148,29 @@ export function buildWeeklyReportPrompt({
     prompt += items.map(it => `- 项目「${it.project}」：${it.content}，进度：${it.progress}`).join('\n');
     prompt += `\n\n`;
   }
+
+  // 全部在管项目（含本周无投入的）：领导要看的是项目全景，不是本周流水
+  if (allProjects.length) {
+    prompt += `【全部在管项目与阶段（人工维护，共 ${allProjects.length} 个）】\n`;
+    allProjects.forEach(p => {
+      prompt += `- 项目「${p.name}」：${p.progress || '（阶段未维护）'}${p.active ? '（本周有投入）' : '（本周无投入）'}\n`;
+    });
+    prompt += `\n`;
+  }
+
+  if (milestones.length) {
+    prompt += `【本周里程碑/关键节点（人工维护，必须完整体现，也是"X 个上线、X 个提测"这类进展摘要的依据）】\n`;
+    milestones.forEach(m => {
+      prompt += `- ${m.date} 项目「${m.project}」：${m.title}${m.metric ? `（${m.metric}）` : ''}\n`;
+    });
+    prompt += `\n`;
+  }
+
+  const profileLines = (allProjects.length ? allProjects.map(p => p.name) : [...new Set(weekRecords.map(r => r.project))])
+    .filter(n => profiles[n] && (profiles[n].goal || profiles[n].background))
+    .map(n => `- 项目「${n}」目标：${profiles[n].goal || '（未填）'}${profiles[n].background ? `；背景：${profiles[n].background}` : ''}`)
+    .join('\n');
+  if (profileLines) prompt += `【项目档案（用于判断进展相对目标处在什么位置）】\n${profileLines}\n\n`;
 
   const totalHours = Object.values(hoursByProject).reduce((s, h) => s + (h || 0), 0);
   const hoursLines = Object.entries(hoursByProject)
@@ -162,11 +201,13 @@ export function buildWeeklyReportPrompt({
 要求：
 1. 全文严格按【格式范文】的结构、章节划分、篇幅比例和行文风格组织；范文中的具体事实、数据、项目名一律不得照抄，内容只能来自上方材料
 2. 报告周期为 ${range}；开头问候语与范文保持一致，若范文没有问候语则加上：您好：\n\n本周(${range})的工作总结具体如下，请查收。
-3. 人工维护的项目进度必须原样使用，不要改写
-4. 有数据写数据；材料中没有的不要编造，尤其不要为凑篇幅虚构风险或成果
-5. 只输出Markdown内容，不要其他说明`;
+3. 人工维护的项目进度必须原样使用，不要改写；范文中若有涵盖全部项目的总览表，用【全部在管项目与阶段】填充，本周无投入的项目也要列出并如实说明本周无进展
+4. 【本周里程碑】必须完整体现，不得遗漏
+5. 范文中若有计划与实际的对照叙述，参照【上周制定的本周计划】说明达成情况与偏差原因
+6. 有数据写数据；材料中没有的不要编造，尤其不要为凑篇幅虚构风险或成果
+7. 只输出Markdown内容，不要其他说明`;
   } else {
-    const sectionRules = weeklySectionRules(sections);
+    const sectionRules = weeklySectionRules(sections, hasLastPlan);
     prompt += `
 要求：
 1. 开头加上：您好：\n\n本周(${range})的工作总结具体如下，请查收。

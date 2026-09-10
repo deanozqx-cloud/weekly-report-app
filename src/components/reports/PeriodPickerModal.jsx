@@ -3,6 +3,7 @@ import { fmt } from '../../lib/utils';
 import { DEFAULT_PROVIDERS } from '../../lib/constants';
 import { LONG_TYPES, pickChildReports } from '../../lib/prompts';
 import Modal from '../ui/Modal';
+import { richPasteHandler } from '../../lib/paste';
 
 // 计算各类型周期的起止日期与显示标签
 function periodOf(type, year, seq) {
@@ -150,6 +151,7 @@ export default function PeriodPickerModal({ type, onConfirm, onClose, workRecord
             placeholder="粘贴 OKR、业绩数据、团队情况、领导要求等额外材料，AI 会充分利用…"
             value={extraMaterial}
             onChange={e => setExtraMaterial(e.target.value)}
+            onPaste={richPasteHandler}
           />
         </div>
 
