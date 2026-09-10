@@ -3,11 +3,12 @@ import { DEFAULT_PROVIDERS, DEFAULT_PROGRESS_OPTIONS, PRIORITY_OPTIONS } from '.
 import { uid } from '../../lib/utils';
 import { callAI, distillStyleRules, refineReport } from '../../lib/ai';
 import { buildLongReportPrompt, buildWeeklyReportPrompt, pickChildReports, isLongType, LONG_TYPES } from '../../lib/prompts';
-import { buildMarkdown, parseMarkdownToReport, renderMarkdown, proseSections, docBlockOrder, PREAMBLE_KEY, HOURS_PER_DAY } from '../../lib/markdown';
+import { buildMarkdown, parseMarkdownToReport, renderMarkdown, proseSections, docBlockOrder, splitContentBlocks, joinContentBlocks, PREAMBLE_KEY, HOURS_PER_DAY } from '../../lib/markdown';
 import { copyRichText, copyPlainText } from '../../lib/clipboard';
 import { richPasteHandler } from '../../lib/paste';
 import SendMailModal from './SendMailModal';
 import EditableSelect from '../ui/EditableSelect';
+import MarkdownTableEditor from '../ui/MarkdownTableEditor';
 
 export default function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [], workRecords = [], setWorkRecords }) {
   // 长周期报告（月报/季报/半年报/年报）：只用 Markdown 模式编辑（结构化表格是周报专属）
@@ -570,12 +571,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
                       {isPreamble ? '问候语与两张表之前的内容' : '清空内容即从周报中移除该板块'}
                     </span>
                   </div>
-                  <textarea
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-300"
-                    rows={Math.min(isPreamble ? 30 : 10, Math.max(3, sec.body.split('\n').length + 1))}
-                    value={sec.body}
-                    onChange={e => updateProse(sec.heading, e.target.value)}
-                  />
+                  <ContentBlocks body={sec.body} onChange={v => updateProse(sec.heading, v)} />
                 </div>
               );
             })}
@@ -642,6 +638,31 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// 文本块的内容：文字段落与表格交替。表格给网格控件，段落给文本框，
+// 任一处改动都重新拼回整块 Markdown 交还上层，保持单一数据源。
+function ContentBlocks({ body, onChange }) {
+  const blocks = splitContentBlocks(body);
+  const update = (idx, patch) => onChange(joinContentBlocks(blocks.map((b, i) => (i === idx ? { ...b, ...patch } : b))));
+
+  return (
+    <div className="space-y-2">
+      {blocks.map((b, i) => (
+        b.kind === 'table' ? (
+          <MarkdownTableEditor key={i} rows={b.rows} onChange={rows => update(i, { rows })} />
+        ) : (
+          <textarea
+            key={i}
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm leading-relaxed focus:outline-none focus:ring-2 focus:ring-blue-300"
+            rows={Math.min(16, Math.max(2, b.text.split('\n').length))}
+            value={b.text}
+            onChange={e => update(i, { text: e.target.value })}
+          />
+        )
+      ))}
     </div>
   );
 }
