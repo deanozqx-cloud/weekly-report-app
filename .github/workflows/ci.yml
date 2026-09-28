@@ -17,9 +17,10 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      # v4 跑在已弃用的 Node 20 上（runner 强制降级到 24 并告警）；v5 起 runs.using 即 node24
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: '22'
           cache: npm
