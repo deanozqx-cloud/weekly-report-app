@@ -59,12 +59,15 @@ create table if not exists projects (
   user_id        uuid not null references auth.users(id) on delete cascade,
   name           text not null,
   progress       text not null default '',
+  status_note    text not null default '',
   goal           text not null default '',
   background     text not null default '',
   milestone_plan text not null default '',
   updated_at     timestamptz not null default now(),
   primary key (user_id, name)
 );
+-- 已建过 projects 的库补列（progress 是阶段枚举，status_note 是一句话现状叙述）
+alter table projects add column if not exists status_note text not null default '';
 
 -- ── 里程碑/关键成果 ──
 create table if not exists milestones (
@@ -77,6 +80,20 @@ create table if not exists milestones (
   primary key (user_id, id)
 );
 create index if not exists milestones_user_date_idx on milestones (user_id, date);
+
+-- ── 问题台账（跨周持续跟进，应对措施逐周累积） ──
+create table if not exists issues (
+  user_id       uuid not null references auth.users(id) on delete cascade,
+  id            text not null,
+  project       text not null default '',
+  date          date not null,
+  title         text not null default '',
+  detail        text not null default '',
+  resolution    text not null default '',
+  resolved_date date,
+  primary key (user_id, id)
+);
+create index if not exists issues_user_date_idx on issues (user_id, date);
 
 -- ── 用户设置（仅真正的设置：LLM 配置、写作规则、报告范文、偏好） ──
 create table if not exists user_settings (
@@ -92,7 +109,7 @@ create table if not exists user_settings (
 do $$
 declare t text;
 begin
-  foreach t in array array['work_records','reports','report_versions','projects','milestones','user_settings'] loop
+  foreach t in array array['work_records','reports','report_versions','projects','milestones','issues','user_settings'] loop
     execute format('alter table %I enable row level security', t);
     -- 幂等：先删后建
     execute format('drop policy if exists "own rows" on %I', t);

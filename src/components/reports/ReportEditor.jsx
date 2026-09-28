@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { DEFAULT_PROVIDERS, DEFAULT_PROGRESS_OPTIONS, PRIORITY_OPTIONS } from '../../lib/constants';
 import { uid } from '../../lib/utils';
 import { callAI, distillStyleRules, refineReport } from '../../lib/ai';
-import { buildLongReportPrompt, buildWeeklyReportPrompt, pickChildReports, isLongType, LONG_TYPES } from '../../lib/prompts';
+import { buildLongReportPrompt, buildWeeklyReportPrompt, pickChildReports, pickIssues, isLongType, LONG_TYPES } from '../../lib/prompts';
 import { buildMarkdown, parseMarkdownToReport, renderMarkdown, proseSections, docBlockOrder, splitContentBlocks, joinContentBlocks, PREAMBLE_KEY, HOURS_PER_DAY } from '../../lib/markdown';
 import { copyRichText, copyPlainText } from '../../lib/clipboard';
 import { richPasteHandler } from '../../lib/paste';
@@ -13,6 +13,10 @@ import MarkdownTableEditor from '../ui/MarkdownTableEditor';
 export default function ReportEditor({ report, onSave, settings, setSettings, weeklyReports = [], workRecords = [], setWorkRecords }) {
   // 长周期报告（月报/季报/半年报/年报）：只用 Markdown 模式编辑（结构化表格是周报专属）
   const isLong = isLongType(report.type);
+  // 输出窗口：半年报/年报本就是长文；周报一旦配了范文，产出的也是多章节长文，
+  // 仍用 4096 会在项目多时被截断
+  const hasSample = !!(settings?.reportTemplates?.[report.type]?.sample || '').trim();
+  const maxOutputTokens = (report.type === 'half' || report.type === 'annual' || hasSample) ? 8192 : 4096;
   const [items, setItems] = useState(report.items || []);
   const [nextItems, setNextItems] = useState(report.nextItems || []);
   const [markdown, setMarkdown] = useState(report.markdown || '');
@@ -130,6 +134,11 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
         // 长周期报告：分层汇总——优先以期间内下一级已审校的报告为输入（季报吃月报、年报吃季报/月报）
         const { tierLabel, reports: childReports } = pickChildReports(weeklyReports, report.type, report.weekStart, report.weekEnd);
         const periodMilestones = (settings?.milestones || []).filter(m => m.date >= report.weekStart && m.date <= report.weekEnd);
+        const periodIssues = pickIssues(settings?.issues || [], report.weekStart, report.weekEnd);
+        const periodStatusNotes = Object.fromEntries(
+          Object.entries(settings?.projectProfiles || {})
+            .map(([n, p]) => [n, p?.statusNote || ''])
+            .filter(([, v]) => v));
         // 范文仅半年报/年报开放，配置了才生效
         const template = (report.type === 'half' || report.type === 'annual') ? settings?.reportTemplates?.[report.type] : null;
         prompt = buildLongReportPrompt({
@@ -139,8 +148,10 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
           childTierLabel: tierLabel,
           records: weekRecords,
           milestones: periodMilestones,
+          issues: periodIssues,
           profiles: settings?.projectProfiles || {},
           statuses: settings?.projectStatuses || {},
+          statusNotes: periodStatusNotes,
           styleRules,
           template,
           extraMaterial: report.extraMaterial || '',
@@ -160,12 +171,18 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
         const activeProjects = new Set(weekRecords.map(r => r.project).filter(Boolean));
         const allProjects = [...new Set([...Object.keys(statuses), ...Object.keys(profiles), ...activeProjects])]
           .filter(Boolean)
-          .map(name => ({ name, progress: statuses[name] || '', active: activeProjects.has(name) }))
+          .map(name => ({
+            name,
+            progress: statuses[name] || '',
+            statusNote: profiles[name]?.statusNote || '',
+            active: activeProjects.has(name),
+          }))
           // 本周有投入的排前面，便于 AI 判断轻重
           .sort((a, b) => (b.active - a.active) || a.name.localeCompare(b.name));
         const weekMilestones = (settings?.milestones || [])
           .filter(m => m.date >= report.weekStart && m.date <= report.weekEnd)
           .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+        const weekIssues = pickIssues(settings?.issues || [], report.weekStart, report.weekEnd);
 
         prompt = buildWeeklyReportPrompt({
           range: report.range,
@@ -178,6 +195,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
           sections: reportSections,
           allProjects,
           milestones: weekMilestones,
+          issues: weekIssues,
           profiles,
           // 范文配置了才生效；未配置时退回用历史周报传递公司写法
           template: settings?.reportTemplates?.weekly,
@@ -196,8 +214,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
         onSave({ ...report, autoAI: false, ...preParsed, markdown: preMd, versions: baseVersions, updatedAt: new Date().toISOString() });
       }
 
-      // 半年报/年报是长文本，输出窗口放大到 8192 避免截断
-      const result = await callAI(settingsCopy, prompt, { maxTokens: (report.type === 'half' || report.type === 'annual') ? 8192 : 4096 });
+      const result = await callAI(settingsCopy, prompt, { maxTokens: maxOutputTokens });
 
       // AI 结果立即落库（不落库的话切换报告/关页面就丢了，而同步指示灯却显示"已同步"）；
       // 生成前的内容已在上方存为「AI生成前」版本快照，可随时恢复
@@ -235,7 +252,7 @@ export default function ReportEditor({ report, onSave, settings, setSettings, we
       onSave({ ...report, ...preParsed, markdown: cur, versions: baseVersions, updatedAt: new Date().toISOString() });
 
       const settingsCopy = { ...settings, llm: { ...settings.llm, default: selectedProvider } };
-      const result = await refineReport(settingsCopy, cur, settings?.styleRules || [], (report.type === 'half' || report.type === 'annual') ? 8192 : 4096);
+      const result = await refineReport(settingsCopy, cur, settings?.styleRules || [], maxOutputTokens);
 
       // 精修结果同样立即落库（精修前内容已存为「精修前」版本快照）
       const parsedR = parseMarkdownToReport(result);
