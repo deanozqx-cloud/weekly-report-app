@@ -1,0 +1,39 @@
+# PR 与 main 推送上的基础门禁：lint、单测、构建。
+# 补这个之前，仓库里唯一的 workflow 是 Supabase 保活定时任务，PR 上没有任何检查，
+# lint 与 build 全靠本地自觉，断言也是改一次写一次、跑完即弃。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 同一分支上新推送时取消上一次未跑完的，省额度也更快拿到结果
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      # v4 跑在已弃用的 Node 20 上（runner 强制降级到 24 并告警）；v5 起 runs.using 即 node24
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 代码检查（0 error 基线）
+        run: npm run lint
+
+      - name: 单元测试
+        run: npm test
+
+      # 构建同时验证产物能出来；gh-pages 的实际部署仍由本地 npm run deploy 触发
+      - name: 构建
+        run: npm run build
