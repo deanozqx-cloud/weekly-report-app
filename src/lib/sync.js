@@ -95,7 +95,9 @@ export function settingsToRows(userId, settings = {}) {
   const projects = names.map(name => ({
     user_id: userId,
     name,
+    // progress 是阶段枚举（开发中/首单跟进…），statusNote 是一句话现状叙述，两者分列
     progress: statuses[name] || '',
+    status_note: profiles[name]?.statusNote || '',
     goal: profiles[name]?.goal || '',
     background: profiles[name]?.background || '',
     milestone_plan: profiles[name]?.milestonePlan || '',
@@ -107,6 +109,16 @@ export function settingsToRows(userId, settings = {}) {
     date: m.date,
     title: m.title || '',
     metric: m.metric || '',
+  }));
+  const issues = (settings.issues || []).map(i => ({
+    user_id: userId,
+    id: i.id,
+    project: i.project || '',
+    date: i.date,
+    title: i.title || '',
+    detail: i.detail || '',
+    resolution: i.resolution || '',
+    resolved_date: i.resolvedDate || null,
   }));
   const userSettings = {
     user_id: userId,
@@ -120,21 +132,35 @@ export function settingsToRows(userId, settings = {}) {
       mail: settings.mail || {},
     },
   };
-  return { projects, milestones, userSettings };
+  return { projects, milestones, issues, userSettings };
 }
 
 // 分表行 → 应用内 settings 片段（与现有 in-memory 结构一致）
-export function settingsFromRows({ projects = [], milestones = [], userSettings = null }) {
+// issues 传 null 表示「本次没读到这张表」（schema 未升级），此时不产出该键，
+// 以免 App 的 { ...local, ...remote } 合并用空数组覆盖掉本地尚未上行的问题台账
+export function settingsFromRows({ projects = [], milestones = [], issues = null, userSettings = null }) {
   const projectStatuses = {};
   const projectProfiles = {};
   projects.forEach(p => {
     if (p.progress) projectStatuses[p.name] = p.progress;
-    if (p.goal || p.background || p.milestone_plan) {
-      projectProfiles[p.name] = { goal: p.goal || '', background: p.background || '', milestonePlan: p.milestone_plan || '' };
+    // status_note 也要纳入判断，否则只填了「当前状态」的项目读回来会整条丢失
+    if (p.status_note || p.goal || p.background || p.milestone_plan) {
+      projectProfiles[p.name] = {
+        statusNote: p.status_note || '',
+        goal: p.goal || '',
+        background: p.background || '',
+        milestonePlan: p.milestone_plan || '',
+      };
     }
   });
   const ms = milestones.map(m => ({ id: m.id, project: m.project, date: m.date, title: m.title, metric: m.metric || '' }));
   const frag = { projectStatuses, projectProfiles, milestones: ms };
+  if (issues) {
+    frag.issues = issues.map(i => ({
+      id: i.id, project: i.project, date: i.date, title: i.title,
+      detail: i.detail || '', resolution: i.resolution || '', resolvedDate: i.resolved_date || '',
+    }));
+  }
   if (userSettings) {
     frag.llm = userSettings.llm;
     frag.styleRules = userSettings.style_rules || [];
@@ -179,6 +205,7 @@ export function buildSyncPlan(userId, prev, next) {
   const nextS = settingsToRows(userId, next.settings || {});
   plan.projects = diffRows(prevS.projects, nextS.projects, 'name');
   plan.milestones = diffRows(prevS.milestones, nextS.milestones);
+  plan.issues = diffRows(prevS.issues, nextS.issues);
   plan.userSettings = JSON.stringify(prevS.userSettings) !== JSON.stringify(nextS.userSettings)
     ? nextS.userSettings : null;
   plan.isEmpty = !plan.workRecords.upserts.length && !plan.workRecords.deletes.length
@@ -186,6 +213,7 @@ export function buildSyncPlan(userId, prev, next) {
     && !plan.versions.upserts.length && !plan.versions.deletes.length
     && !plan.projects.upserts.length && !plan.projects.deletes.length
     && !plan.milestones.upserts.length && !plan.milestones.deletes.length
+    && !plan.issues.upserts.length && !plan.issues.deletes.length
     && !plan.userSettings;
   return plan;
 }

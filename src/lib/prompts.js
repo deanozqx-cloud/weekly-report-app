@@ -42,7 +42,7 @@ export const WEEKLY_COLUMNS = [
 
 // 生成周报正文时追加的板块要求。sections 为空对象时退回原来的两表结构。
 // hasLastPlan 为真时额外要求对照上周计划说明偏差
-function weeklySectionRules(sections = {}, hasLastPlan = false) {
+function weeklySectionRules(sections = {}, hasLastPlan = false, hasIssues = false) {
   const rules = [];
   if (hasLastPlan) {
     rules.push(`- "本周工作内容"的叙述要对照【上周制定的本周计划】：按计划完成的正常陈述结果；**未达成或方向有变的必须写明"原计划……实际……"及原因**（如依赖外部方进度、优先级调整）。计划与实际一致时不要为凑字数硬加对比`);
@@ -54,7 +54,9 @@ function weeklySectionRules(sections = {}, hasLastPlan = false) {
     rules.push(`- 在"本周工作内容"表格之后，插入 "## 关键成果与产出" 小节，列表形式。内容来自【本周里程碑】与每日明细中标注了「成果：」的记录，逐条写清交付了什么、达到什么效果；里程碑必须完整体现，不得遗漏。若两者都没有，整个小节省略不输出`);
   }
   if (sections.risks) {
-    rules.push(`- 在"关键成果与产出"之后，插入 "## 问题与风险" 小节，列表形式。**只允许写工作内容里有明确文字依据的**卡点（例如记录中出现"卡在""等××方""阻塞""延期""待确认"等表述），每条注明涉及项目与影响。**严禁凭空推测或为凑内容编造风险**；若本周记录中找不到任何此类依据，整个小节省略不输出`);
+    rules.push(hasIssues
+      ? `- 在"关键成果与产出"之后，插入 "## 问题与风险" 小节，列表形式。**以【问题与风险台账】为准**：台账中每一条都要写出，"应对进展"原样采用、不得改写或自行推断；可再补充本周工作内容里有明确文字依据的新卡点（记录中出现"卡在""等××方""阻塞""延期""待确认"等表述）。**严禁凭空推测或为凑内容编造风险**`
+      : `- 在"关键成果与产出"之后，插入 "## 问题与风险" 小节，列表形式。**只允许写工作内容里有明确文字依据的**卡点（例如记录中出现"卡在""等××方""阻塞""延期""待确认"等表述），每条注明涉及项目与影响。**严禁凭空推测或为凑内容编造风险**；若本周记录中找不到任何此类依据，整个小节省略不输出`);
   }
   return rules;
 }
@@ -82,7 +84,7 @@ export function weeklyNextColumns(sections = {}) {
 export function buildWeeklyReportPrompt({
   range, pastReports = [], styleRules = [], weekRecords = [], items = [],
   hoursByProject = {}, maintainedStatuses = {}, sections = {},
-  allProjects = [], milestones = [], profiles = {}, template, extraMaterial,
+  allProjects = [], milestones = [], issues = [], profiles = {}, template, extraMaterial,
 }) {
   const sample = (template?.sample || '').trim();
   const useSample = !!sample;
@@ -151,9 +153,11 @@ export function buildWeeklyReportPrompt({
 
   // 全部在管项目（含本周无投入的）：领导要看的是项目全景，不是本周流水
   if (allProjects.length) {
-    prompt += `【全部在管项目与阶段（人工维护，共 ${allProjects.length} 个）】\n`;
+    const anyNote = allProjects.some(p => p.statusNote);
+    prompt += `【全部在管项目与阶段（人工维护，共 ${allProjects.length} 个${anyNote ? '；"当前状态"为人工维护的现状叙述，必须原样采用、不要改写' : ''}）】\n`;
     allProjects.forEach(p => {
-      prompt += `- 项目「${p.name}」：${p.progress || '（阶段未维护）'}${p.active ? '（本周有投入）' : '（本周无投入）'}\n`;
+      const note = p.statusNote ? `；当前状态：${p.statusNote}` : '';
+      prompt += `- 项目「${p.name}」：阶段 ${p.progress || '（未维护）'}${note}${p.active ? '（本周有投入）' : '（本周无投入）'}\n`;
     });
     prompt += `\n`;
   }
@@ -162,6 +166,16 @@ export function buildWeeklyReportPrompt({
     prompt += `【本周里程碑/关键节点（人工维护，必须完整体现，也是"X 个上线、X 个提测"这类进展摘要的依据）】\n`;
     milestones.forEach(m => {
       prompt += `- ${m.date} 项目「${m.project}」：${m.title}${m.metric ? `（${m.metric}）` : ''}\n`;
+    });
+    prompt += `\n`;
+  }
+
+  if (issues.length) {
+    prompt += `【问题与风险台账（人工维护，跨周持续跟进；"应对进展"必须原样采用，不得改写或自行推断）】\n`;
+    issues.forEach(i => {
+      const flag = i.resolvedDate ? '（本周已解决）' : '（跟进中）';
+      const bits = [i.detail, i.resolution && `应对进展：${i.resolution}`].filter(Boolean).join('；');
+      prompt += `- 项目「${i.project}」${flag}：${i.title}${bits ? `（${bits}）` : ''}\n`;
     });
     prompt += `\n`;
   }
@@ -201,13 +215,14 @@ export function buildWeeklyReportPrompt({
 要求：
 1. 全文严格按【格式范文】的结构、章节划分、篇幅比例和行文风格组织；范文中的具体事实、数据、项目名一律不得照抄，内容只能来自上方材料
 2. 报告周期为 ${range}；开头问候语与范文保持一致，若范文没有问候语则加上：您好：\n\n本周(${range})的工作总结具体如下，请查收。
-3. 人工维护的项目进度必须原样使用，不要改写；范文中若有涵盖全部项目的总览表，用【全部在管项目与阶段】填充，本周无投入的项目也要列出并如实说明本周无进展
+3. 人工维护的项目进度与"当前状态"必须原样使用，不要改写；范文中若有涵盖全部项目的总览表，用【全部在管项目与阶段】填充，本周无投入的项目也要列出并如实说明本周无进展。总览表的状态列与正文"本周工作内容"不要重复措辞：前者写项目此刻处在什么位置，后者写本周做了哪些动作
 4. 【本周里程碑】必须完整体现，不得遗漏
 5. 范文中若有计划与实际的对照叙述，参照【上周制定的本周计划】说明达成情况与偏差原因
-6. 有数据写数据；材料中没有的不要编造，尤其不要为凑篇幅虚构风险或成果
-7. 只输出Markdown内容，不要其他说明`;
+6. 范文中若有"问题与反馈"一类章节，以【问题与风险台账】为准逐条写出，"应对进展"原样采用；台账之外只能补充本周记录里有明确文字依据的卡点
+7. 有数据写数据；材料中没有的不要编造，尤其不要为凑篇幅虚构风险或成果
+8. 只输出Markdown内容，不要其他说明`;
   } else {
-    const sectionRules = weeklySectionRules(sections, hasLastPlan);
+    const sectionRules = weeklySectionRules(sections, hasLastPlan, issues.length > 0);
     prompt += `
 要求：
 1. 开头加上：您好：\n\n本周(${range})的工作总结具体如下，请查收。
@@ -232,6 +247,15 @@ export const LONG_TYPES = {
 };
 
 export const isLongType = (type) => !!LONG_TYPES[type];
+
+// 报告期内该呈现的问题：期末之前记录的、仍在跟进的（跨周期持续），
+// 加上本期内刚解决的（值得写一句收口）。已在往期解决的不再重复出现。
+export function pickIssues(allIssues = [], start, end) {
+  return allIssues
+    .filter(i => i.date && i.date <= end)
+    .filter(i => !i.resolvedDate || (i.resolvedDate >= start && i.resolvedDate <= end))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+}
 
 // 在期间内挑选子报告：从紧邻的下一级开始逐级向下找，取第一个非空层级。
 // 周报按重叠匹配（周可能跨期间边界），其余层级按完全包含匹配。
@@ -258,7 +282,7 @@ export function pickChildReports(allReports, type, start, end) {
 // 构建长周期报告生成 prompt（月报/季报/半年报/年报通用）。
 // template: { sample, instructions }（仅半年报/年报开放，配置范文后按范文格式生成，否则用默认表格格式）
 // extraMaterial: 生成时临时粘贴的补充资料（OKR、数据、要求等）
-export function buildLongReportPrompt({ type, label, childReports, childTierLabel, records, milestones, profiles, statuses, styleRules, template, extraMaterial }) {
+export function buildLongReportPrompt({ type, label, childReports, childTierLabel, records, milestones, issues = [], profiles, statuses, statusNotes = {}, styleRules, template, extraMaterial }) {
   const cfg = LONG_TYPES[type] || LONG_TYPES.monthly;
   const sample = (template?.sample || '').trim();
   const useSample = !!sample;
@@ -301,6 +325,16 @@ export function buildLongReportPrompt({ type, label, childReports, childTierLabe
     prompt += `\n`;
   }
 
+  if (issues.length) {
+    prompt += `【问题与风险台账（人工维护，跨周期持续跟进；"应对进展"必须原样采用，不得改写或自行推断）】\n`;
+    issues.forEach(i => {
+      const flag = i.resolvedDate ? '（本期已解决）' : '（跟进中）';
+      const bits = [i.detail, i.resolution && `应对进展：${i.resolution}`].filter(Boolean).join('；');
+      prompt += `- 项目「${i.project}」${flag}：${i.title}${bits ? `（${bits}）` : ''}\n`;
+    });
+    prompt += `\n`;
+  }
+
   const projectsInPeriod = [...new Set(records.map(r => r.project))];
   const profileLines = projectsInPeriod
     .filter(p => profiles[p] && (profiles[p].goal || profiles[p].background))
@@ -316,7 +350,10 @@ export function buildLongReportPrompt({ type, label, childReports, childTierLabe
     .join('\n');
   if (hoursLines) prompt += `【${cfg.periodWord}各项目工时汇总】\n${hoursLines}\n\n`;
 
-  const statusLines = projectsInPeriod.filter(p => statuses[p]).map(p => `- 项目「${p}」：${statuses[p]}`).join('\n');
+  const statusLines = projectsInPeriod
+    .filter(p => statuses[p] || statusNotes[p])
+    .map(p => `- 项目「${p}」：阶段 ${statuses[p] || '（未维护）'}${statusNotes[p] ? `；当前状态：${statusNotes[p]}` : ''}`)
+    .join('\n');
   if (statusLines) prompt += `【项目进度（人工维护，${useSample ? '表述进度时以此为准' : '必须原样填入"项目进度"列'}，不要改写）】\n${statusLines}\n\n`;
 
   if ((extraMaterial || '').trim()) {

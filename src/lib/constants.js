@@ -66,10 +66,14 @@ export const defaultSettings = {
   projectStatuses: {},
   // AI 从用户历史修改中提炼的写作规则（风格画像），生成时注入 prompt
   styleRules: [],
-  // 项目档案：{ [项目名]: { goal, background, milestonePlan } }
+  // 项目档案：{ [项目名]: { statusNote, goal, background, milestonePlan } }
+  // statusNote 是一句话「当前状态」叙述，与 projectStatuses 的阶段枚举分列，供总览表使用
   projectProfiles: {},
   // 里程碑/关键成果记录：[{ id, date, project, title, metric }]
   milestones: [],
+  // 问题台账：[{ id, date, project, title, detail, resolution, resolvedDate }]
+  // 跨周持续跟进，resolution 逐周更新；resolvedDate 为空表示仍在跟进
+  issues: [],
   // 报告范文：{ weekly|half|annual: { sample, instructions } }，配置范文后按范文格式生成
   reportTemplates: {},
   // 周报板块与列开关：公司对详略的要求会变，逐项可关，不写死在 prompt 里

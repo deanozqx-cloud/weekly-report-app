@@ -18,7 +18,7 @@ export default function ProjectDetailModal({ project, workRecords, weeklyReports
   const totalHours = records.reduce((s, r) => s + r.hours, 0);
 
   // ── 项目档案 ──
-  const profile = settings?.projectProfiles?.[project] || { goal: '', background: '', milestonePlan: '' };
+  const profile = settings?.projectProfiles?.[project] || { statusNote: '', goal: '', background: '', milestonePlan: '' };
   const [profileDraft, setProfileDraft] = useState(profile);
   const [profileSaved, setProfileSaved] = useState(false);
   const saveProfile = () => {
@@ -46,11 +46,37 @@ export default function ProjectDetailModal({ project, workRecords, weeklyReports
     setSettings(prev => ({ ...prev, milestones: (prev.milestones || []).filter(m => m.id !== id) }));
   };
 
+  // ── 问题台账 ──
+  const issues = (settings?.issues || [])
+    .filter(i => i.project === project)
+    // 跟进中的排前面，其次按日期倒序
+    .sort((a, b) => (Number(!!a.resolvedDate) - Number(!!b.resolvedDate)) || String(b.date).localeCompare(String(a.date)));
+  const openIssueCount = issues.filter(i => !i.resolvedDate).length;
+  const [issueDraft, setIssueDraft] = useState({ date: today(), title: '', detail: '' });
+  const addIssue = () => {
+    if (!issueDraft.date) { alert('请选择日期'); return; }
+    if (!issueDraft.title.trim()) { alert('请填写问题'); return; }
+    const item = {
+      id: uid(), project, date: issueDraft.date,
+      title: issueDraft.title.trim(), detail: issueDraft.detail.trim(),
+      resolution: '', resolvedDate: '',
+    };
+    setSettings(prev => ({ ...prev, issues: [...(prev.issues || []), item] }));
+    setIssueDraft({ date: today(), title: '', detail: '' });
+  };
+  const updateIssue = (id, patch) => {
+    setSettings(prev => ({ ...prev, issues: (prev.issues || []).map(i => (i.id === id ? { ...i, ...patch } : i)) }));
+  };
+  const removeIssue = (id) => {
+    setSettings(prev => ({ ...prev, issues: (prev.issues || []).filter(i => i.id !== id) }));
+  };
+
   const tabs = [
     { key: 'records', label: `工作明细（${records.length}条）` },
     { key: 'reports', label: `周报记录（${reports.length}份）` },
     { key: 'profile', label: '项目档案' },
     { key: 'milestones', label: `里程碑（${milestones.length}）` },
+    { key: 'issues', label: `问题（${openIssueCount}）` },
   ];
 
   return (
@@ -120,6 +146,19 @@ export default function ProjectDetailModal({ project, workRecords, weeklyReports
       {tab === 'profile' && (
         <div className="space-y-4">
           <p className="text-xs text-gray-400">项目档案用于月报/年报生成时评估进展是否达成目标，建议维护。</p>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">当前状态</label>
+            <textarea
+              className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
+              rows={2}
+              placeholder="一句话说清项目此刻处在什么位置，如：已完成 PRD 并移交开发，一期优化迭代进行中"
+              value={profileDraft.statusNote || ''}
+              onChange={e => setProfileDraft({ ...profileDraft, statusNote: e.target.value })}
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              报告总览表的「当前状态」列会<strong className="text-gray-500">原样采用</strong>这句话。本周没有工作记录的项目尤其需要维护，否则 AI 只能靠猜。也可在汇总页表格里直接改。
+            </p>
+          </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">项目目标</label>
             <textarea
@@ -206,6 +245,75 @@ export default function ProjectDetailModal({ project, workRecords, weeklyReports
                   onClick={() => removeMilestone(m.id)}
                   className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 text-lg leading-none shrink-0 transition-opacity"
                 >&times;</button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {tab === 'issues' && (
+        <div className="space-y-4">
+          <p className="text-xs text-gray-400">
+            跨周持续跟进的问题。「应对进展」每周更新一次，报告的「问题与反馈」章节会<strong className="text-gray-500">原样采用</strong>，不会被 AI 改写。标记解决后当周报告仍会带一句收口，之后不再出现。
+          </p>
+          {/* 添加表单 */}
+          <div className="bg-gray-50 rounded-lg p-3 space-y-2">
+            <div className="flex gap-2">
+              <input
+                type="date"
+                className="border border-gray-200 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300"
+                value={issueDraft.date}
+                onChange={e => setIssueDraft({ ...issueDraft, date: e.target.value })}
+              />
+              <input
+                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300 min-w-0"
+                placeholder="问题，如：线上线下两套对账流程并行，数据偏差需开发排查"
+                value={issueDraft.title}
+                onChange={e => setIssueDraft({ ...issueDraft, title: e.target.value })}
+              />
+            </div>
+            <div className="flex gap-2">
+              <input
+                className="flex-1 border border-gray-200 rounded-lg px-3 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-300 min-w-0"
+                placeholder="补充说明（可选），如：快递公司催账急，垫资风险下仍需每周线下对账"
+                value={issueDraft.detail}
+                onChange={e => setIssueDraft({ ...issueDraft, detail: e.target.value })}
+                onKeyDown={e => { if (e.key === 'Enter') addIssue(); }}
+              />
+              <button onClick={addIssue} className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700 shrink-0">添加</button>
+            </div>
+          </div>
+          {/* 列表 */}
+          <div className="max-h-72 overflow-y-auto scrollbar-thin space-y-2">
+            {issues.length === 0 ? (
+              <p className="text-sm text-gray-400 text-center py-6">暂无问题记录</p>
+            ) : issues.map(i => (
+              <div key={i.id} className="group px-3 py-2.5 bg-gray-50 rounded-lg text-sm space-y-1.5">
+                <div className="flex items-start gap-3">
+                  <span className="text-gray-400 shrink-0 w-24">{i.date}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className={`font-medium ${i.resolvedDate ? 'text-gray-400 line-through' : 'text-gray-700'}`}>
+                      {i.resolvedDate ? '\u2705' : '\u26a0\ufe0f'} {i.title}
+                    </div>
+                    {i.detail && <div className="text-xs text-gray-500 mt-0.5">{i.detail}</div>}
+                    {i.resolvedDate && <div className="text-xs text-gray-400 mt-0.5">{i.resolvedDate} 已解决</div>}
+                  </div>
+                  <button
+                    onClick={() => updateIssue(i.id, { resolvedDate: i.resolvedDate ? '' : today() })}
+                    className="opacity-0 group-hover:opacity-100 text-xs px-2 py-1 rounded text-gray-500 hover:text-blue-600 hover:bg-blue-50 shrink-0 whitespace-nowrap transition-opacity"
+                  >{i.resolvedDate ? '重新打开' : '标记解决'}</button>
+                  <button
+                    onClick={() => removeIssue(i.id)}
+                    className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-400 text-lg leading-none shrink-0 transition-opacity"
+                  >&times;</button>
+                </div>
+                <input
+                  key={`${i.id}:${i.resolution}`}
+                  className="w-full border border-gray-200 rounded-lg px-2.5 py-1.5 text-xs bg-white focus:outline-none focus:ring-2 focus:ring-blue-300"
+                  placeholder="应对进展（每周更新，会原样写进报告）"
+                  defaultValue={i.resolution || ''}
+                  onBlur={e => updateIssue(i.id, { resolution: e.target.value.trim() })}
+                  onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
+                />
               </div>
             ))}
           </div>

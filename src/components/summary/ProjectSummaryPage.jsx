@@ -18,6 +18,8 @@ export default function ProjectSummaryPage({ workRecords, setWorkRecords, weekly
   const [editing, setEditing] = useState(null);
 
   const projectStatuses = settings?.projectStatuses || {};
+  const statusNotes = Object.fromEntries(
+    Object.entries(settings?.projectProfiles || {}).map(([n, p]) => [n, p?.statusNote || '']));
   const projectProfiles = settings?.projectProfiles || {};
   // 与周报共用同一套进度选项；历史自定义的 statusOptions 合并进来，不丢用户数据
   const progressOptions = useMemo(() => [...new Set([
@@ -27,6 +29,16 @@ export default function ProjectSummaryPage({ workRecords, setWorkRecords, weekly
 
   const setProjectProgress = (project, progress) => {
     setSettings(prev => ({ ...prev, projectStatuses: { ...(prev.projectStatuses || {}), [project]: progress } }));
+  };
+  // 当前状态是一句话现状叙述，与阶段枚举分列；存进 projectProfiles 以复用改名级联与 projects 表
+  const setProjectStatusNote = (project, statusNote) => {
+    setSettings(prev => {
+      const profiles = { ...(prev.projectProfiles || {}) };
+      const cur = profiles[project] || { goal: '', background: '', milestonePlan: '' };
+      if ((cur.statusNote || '') === statusNote) return prev;
+      profiles[project] = { ...cur, statusNote };
+      return { ...prev, projectProfiles: profiles };
+    });
   };
   const addProgressOption = v => {
     setSettings(prev => ({ ...prev, progressOptions: [...(prev.progressOptions || DEFAULT_PROGRESS_OPTIONS), v] }));
@@ -116,7 +128,8 @@ export default function ProjectSummaryPage({ workRecords, setWorkRecords, weekly
       if (profiles[oldName] != null && profiles[newName] == null) profiles[newName] = profiles[oldName];
       delete profiles[oldName];
       const milestones = (prev.milestones || []).map(m => m.project === oldName ? { ...m, project: newName } : m);
-      return { ...prev, projectStatuses: statuses, projectProfiles: profiles, milestones };
+      const issues = (prev.issues || []).map(i => i.project === oldName ? { ...i, project: newName } : i);
+      return { ...prev, projectStatuses: statuses, projectProfiles: profiles, milestones, issues };
     });
     setCheckedProjects(prev => { const next = new Set(prev); next.delete(oldName); return next; });
     if (filterProject === oldName) setFilterProject('');
@@ -194,6 +207,7 @@ export default function ProjectSummaryPage({ workRecords, setWorkRecords, weekly
                 <th className="px-3 py-3 text-right font-medium">工时</th>
                 <th className="px-3 py-3 text-right font-medium">人天</th>
                 <th className="px-4 py-3 text-left font-medium w-36">项目进度</th>
+                <th className="px-3 py-3 text-left font-medium w-52">当前状态</th>
               </tr>
               {/* 合计行：紧跟标题行 */}
               <tr className="bg-blue-50 border-b border-blue-100 text-xs font-medium text-blue-700">
@@ -280,6 +294,17 @@ export default function ProjectSummaryPage({ workRecords, setWorkRecords, weekly
                         onAddOption={addProgressOption}
                         placeholder="设置进度"
                         className="w-28"
+                      />
+                    </td>
+                    <td className="px-3 py-3" onClick={e => e.stopPropagation()}>
+                      <input
+                        key={`${s.project}:${statusNotes[s.project] || ''}`}
+                        className="w-full border border-transparent hover:border-gray-200 focus:border-blue-300 rounded-lg px-2 py-1 text-xs bg-transparent focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-200 transition-colors"
+                        placeholder="一句话现状"
+                        title={statusNotes[s.project] || ''}
+                        defaultValue={statusNotes[s.project] || ''}
+                        onBlur={e => setProjectStatusNote(s.project, e.target.value.trim())}
+                        onKeyDown={e => { if (e.key === 'Enter') e.target.blur(); }}
                       />
                     </td>
                   </tr>
